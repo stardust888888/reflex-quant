@@ -20,7 +20,7 @@ FILE_LINE_CAP = {
     "engine/ai_worker.py": 12_303,
     "api_server.py": 8_472,
     "bridge_server.py": 7_634,
-    "review/review_agent.py": 4_846,
+    "review/review_agent.py": 4_268,
 }
 
 # 单函数上限：现有最长是 ai_worker() 的 3,479 行，留 21 行余量
