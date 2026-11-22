@@ -224,19 +224,6 @@ def _parse_judge_json(text: str, source: str = "") -> dict | None:
     except Exception as e:
         print(f"[JUDGE] JSON parse FAIL ({source}): {e}", flush=True)
         return None
-        # 2) 剥 markdown ```json 包裹
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip().rstrip("`")
-        # 3) 强健 JSON 解析：找第一个 {...} 块
-        if not text.startswith("{"):
-            start = text.find("{")
-            end = text.rfind("}")
-            if start >= 0 and end > start:
-                text = text[start:end+1]
-        return json.loads(text)
 
 
 def process_one(decision_id: int, conn: sqlite3.Connection) -> bool:

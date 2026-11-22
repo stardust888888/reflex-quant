@@ -1,9 +1,10 @@
 # vulture 基线（--min-confidence 100）
 # 冻结于 2026-11-22。新增条目会让 quality 工作流变红；
 # 修掉一个就从这里删一行 —— 这个文件只应该变短。
+
 #
-# ── 2026-11-22 第一轮清理：26 → 18 ─────────────────────────────────────────
-# 已删掉的 7 条（都是纯死代码，无副作用）：
+# ── 2026-11-22 第一轮清理：26 → 17 ─────────────────────────────────────────
+# 已删掉的 8 条（都是纯死代码，无副作用）：
 #   cron_tech_signals.py           重复的 return 0
 #   missed_signal_reflection.py    重复的 return 0
 #   review/reflection_logic_analysis.py  重复的 return findings
@@ -11,8 +12,17 @@
 #   kb_facade.py                   try/except 全分支已 return 后的收尾 return out
 #   review/gate_reflection.py      字典 return 之后多余的 return None
 #   feeds/es_feed.py + nq_feed.py  `"es" if False else "es"` 恒等三元
+#   judge_worker.py                解析失败后残留的旧清洗逻辑（见下方"已纠正"）
 #
-# 下面 18 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
+# ⚠ 判断纠正（写下来是为了留下判断过程的痕迹）：
+#   judge_worker.py 那段不可达代码，第一遍我判成"清洗被 return 挡住 → markdown
+#   包裹会静默失败"，属缺陷。核对后是错的：真正的清洗已在函数开头做过
+#   （剥 <think>、剥 ``` 包裹、取第一个 {}），死的那段是更早版本的残留，
+#   而且它还少补 8 个兜底字段。功能没丢，只是代码脏。
+#   已删残留，并新增 tests/test_judge_json_parse.py（8 条用例）锁住"各种包裹
+#   形态都能解析"—— 否则下次有人再把开头那段当成死代码删掉，才会真丢结果。
+#
+# 下面 17 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
 # 这正是「工具查结构、查不出逻辑」的实例：vulture 只说"没人用"，
 # 说不清"为什么没人用"。四类原因要分开看。
 #
@@ -51,9 +61,6 @@
 #   bridge_server.py :: redundant if-condition
 #     第 4385 行 `if True:` 包住 78 行 SSE 回补逻辑，是为了保持这段的缩进层级。
 #     去掉它要整体退一级缩进，块内含多行字符串，改错会动到推送文案 —— 收益小于风险。
-#   judge_worker.py :: unreachable code after 'return'
-#     JSON 解析失败分支里 `return None` 之后还有一段剥 ```json 包裹的清洗代码，
-#     永远不执行。这是逻辑顺序错了（应先清洗再解析），属缺陷不是死代码。
 #   seed_trade_reflections.py :: unreachable code after 'return'
 #     该脚本 v404 已明确停用（只允许写真实成交反思），函数开头 [REFUSED] 直接
 #     return 2，后面旧实现整段留作参考。要删应单独提交，不与本次混合。
@@ -69,7 +76,6 @@ src_python/event_atom.py :: unused variable 'data_anchor_ts'
 src_python/event_atom.py :: unused variable 'event_window_minutes'
 src_python/event_impact_curve.py :: unused variable 'price_at_event'
 src_python/health_check.py :: unused variable 'tail_lines'
-src_python/judge_worker.py :: unreachable code after 'return'
 src_python/meta_reflection_updater.py :: unused variable 'current_version'
 src_python/meta_reflection_updater.py :: unused variable 'old_summary'
 src_python/missed_signal_reflection.py :: unused variable 'paper_run_id'

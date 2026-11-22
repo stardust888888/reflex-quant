@@ -3622,7 +3622,7 @@
  "src_python/intraday_store.py :: save_anomalies": 2,
  "src_python/intraday_store.py :: yahoo_ticker": 3,
  "src_python/judge_worker.py :: _call_judge_llm": 20,
- "src_python/judge_worker.py :: _parse_judge_json": 25,
+ "src_python/judge_worker.py :: _parse_judge_json": 14,
  "src_python/judge_worker.py :: main_loop": 9,
  "src_python/judge_worker.py :: process_one": 12,
  "src_python/judgment_benchmark.py :: Outcome::hit": 6,
