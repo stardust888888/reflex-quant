@@ -8957,6 +8957,54 @@ class _BatchPersistCtx:
     failures: Any
 
 
+
+def _bp_drop_gate_miss(conn, nid, gm_st, gm_rc, gm_why, gm_check, gr) -> bool:
+    """门卫未给出可用判定 → 不写 ai_decisions，返回 True 让调用方 continue。
+
+    FIX-8（2026-11-09）：区分「门卫看不清」与「门卫说没信号」——
+    看不清 → PENDING + retry_count+1（带冷却，等门卫回放）；
+    真无信号 → FILTERED（系统主动不分析，不是失败）。
+    判定本身在 gate_drop_policy.resolve_drop_status（纯函数，有独立测试）。
+    """
+    if gm_st is None:
+        return False
+    try:
+        gr.apply_block("GATE-MISS", f"门卫未给出可用判定({gm_why}) → 跳过 ai_decisions 写入")
+    except Exception:
+        pass
+    print(
+        f"  [GATE-MISS] news=#{nid} gate_strength={gm_check['gate_strength']} "
+        f"verdict='{gm_check['gate_verdict']}' is_noise={gm_check['is_noise']} "
+        f"gate_unavailable={gm_check['gate_unavailable']} "
+        f"→ {gm_st}（{gm_why}, retry {gm_check['retry_count']}→{gm_rc}），"
+        f"不写 ai_decisions",
+        flush=True,
+    )
+    try:
+        if gm_st == gate_drop_policy.STATUS_PENDING:
+            # 带冷却：否则立刻又会被认领，形成热循环
+            conn.execute(
+                "UPDATE raw_news SET retry_count=?, status='PENDING',"
+                " processing_at=datetime('now','localtime','+' || ? || ' seconds')"
+                " WHERE id=?",
+                (gm_rc, _BATCH_RETRY_COOLDOWN_SEC, nid),
+            )
+        else:
+            conn.execute(
+                "UPDATE raw_news SET retry_count=?, status=?, processing_at=NULL"
+                " WHERE id=?",
+                (gm_rc, gm_st, nid),
+            )
+        conn.commit()
+    except Exception as gm_exc:
+        # v322: 标 FAILED 失败 → 该行卡 PROCESSING → 15 分钟后才被看门狗回收
+        print(
+            f"  [AI] ⚠️ 门卫排除行标 FAILED 失败 (news=#{nid}): "
+            f"{type(gm_exc).__name__}: {str(gm_exc)[:100]}",
+            flush=True,
+        )
+    return True
+
 def _main_budget_exhausted() -> bool:
     """v431：主分析日预算闸（第二道防烧穿闸）。
 
@@ -10238,41 +10286,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                         )
                         if _gm_check else (None, 0, "")
                     )
-                    if _gm_st is not None:
-                        # 标记 _focus_downgrade 状态为 GATE-MISS（便于调试）
-                        try:
-                            _gr.apply_block("GATE-MISS", f"门卫未给出可用判定({_gm_why}) → 跳过 ai_decisions 写入")
-                        except Exception:
-                            pass
-                        print(
-                            f"  [GATE-MISS] news=#{nid} gate_strength={_gm_check['gate_strength']} "
-                            f"verdict='{_gm_check['gate_verdict']}' is_noise={_gm_check['is_noise']} "
-                            f"gate_unavailable={_gm_check['gate_unavailable']} "
-                            f"→ {_gm_st}（{_gm_why}, retry {_gm_check['retry_count']}→{_gm_rc}），"
-                            f"不写 ai_decisions",
-                            flush=True,
-                        )
-                        try:
-                            if _gm_st == gate_drop_policy.STATUS_PENDING:
-                                # 带冷却：否则立刻又会被认领，形成热循环
-                                conn.execute(
-                                    "UPDATE raw_news SET retry_count=?, status='PENDING',"
-                                    " processing_at=datetime('now','localtime','+' || ? || ' seconds')"
-                                    " WHERE id=?",
-                                    (_gm_rc, _BATCH_RETRY_COOLDOWN_SEC, nid),
-                                )
-                            else:
-                                conn.execute(
-                                    "UPDATE raw_news SET retry_count=?, status=?, processing_at=NULL"
-                                    " WHERE id=?",
-                                    (_gm_rc, _gm_st, nid),
-                                )
-                            conn.commit()
-                        except Exception as _gm_exc:
-                            # v322: 标 FAILED 失败 → 该行卡 PROCESSING → 15 分钟后才被看门狗回收
-                            print(f"  [AI] ⚠️ 门卫排除行标 FAILED 失败 (news=#{nid}): "
-                                  f"{type(_gm_exc).__name__}: {str(_gm_exc)[:100]}",
-                                  flush=True)
+                    # v536：门卫未给出可用判定 → 丢弃本行，逻辑见 _bp_drop_gate_miss
+                    if _bp_drop_gate_miss(conn, nid, _gm_st, _gm_rc, _gm_why, _gm_check, _gr):
                         continue
                     # ── v181: 取消 L3-MENWEI 闸门（realtime_filter 已二分类为"可交易/排除"，
                     # 排除的新闻在 ingest 阶段就被打 is_noise=1，根本进不到 ai_worker ；
