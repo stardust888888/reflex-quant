@@ -62,6 +62,7 @@ def test_manual_entry_false_when_only_system_routes(tmp_path, monkeypatch):
 # ── 2. 反思计数并入 MSR ────────────────────────────────────────────────────
 
 def _reflection_db() -> sqlite3.Connection:
+    import missed_signal_reflection as msr
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     c.executescript("""
@@ -71,13 +72,9 @@ def _reflection_db() -> sqlite3.Connection:
             hit INTEGER, actual_outcome_pct REAL, confidence_at_time REAL,
             created_at TEXT
         );
-        CREATE TABLE missed_signal_reflections (
-            id INTEGER PRIMARY KEY, decision_id INTEGER,
-            dimension TEXT, subcategory TEXT, reflection_text TEXT,
-            hit INTEGER, move_pct REAL, confidence_at_time REAL,
-            created_at TEXT, asset TEXT
-        );
     """)
+    # 用生产 DDL，不手抄 —— 手抄版漏了 paper_run_id，与 db.py 漂移（v535）。
+    c.execute(msr._db._CREATE_MISSED_SIGNAL_REFLECTIONS)
     return c
 
 

@@ -90,19 +90,13 @@ def _mk_refl_db(path=":memory:") -> sqlite3.Connection:
     conn.execute("""CREATE TABLE causal_chains (
         id INTEGER PRIMARY KEY, asset TEXT, enabled INTEGER)""")
     # v482 把"漏检 HOLD"从 trade_reflections_v2 分出来单独记账（HOLD 没有 pnl，
-    # 混在反思表里会把反思条数/深度分全部拉平）。测试夹具必须跟上这张表，
-    # 否则 _upsert_one 在内存库里直接 `no such table`（2026-11-19 全量复跑抓到）。
-    conn.execute("""CREATE TABLE missed_signal_reflections (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        decision_id INTEGER NOT NULL UNIQUE,
-        asset TEXT NOT NULL DEFAULT '', action TEXT NOT NULL DEFAULT 'HOLD',
-        dimension TEXT NOT NULL DEFAULT '', subcategory TEXT NOT NULL DEFAULT '',
-        root_cause TEXT NOT NULL DEFAULT '', lesson TEXT NOT NULL DEFAULT '',
-        verification TEXT NOT NULL DEFAULT '',
-        move_pct REAL, hit INTEGER, confidence_at_time REAL,
-        reflection_text TEXT NOT NULL DEFAULT '',
-        evidence TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT ''
-    )""")
+    # 混在反思表里会把反思条数/深度分全部拉平）。
+    # v535：这张表的建表语句改成直接用生产 DDL —— 手抄 schema 与 db.py 漂移过一次
+    # （代码补了 paper_run_id、夹具还是老 14 列，_upsert_one 的 SQL 在内存库里
+    #  直接 no such column，异常被吞成 None，本地按文件名筛测试看不出来，CI 才炸）。
+    # 表结构只留 db.py 一个真源。
+    import missed_signal_reflection as _msr
+    conn.execute(_msr._db._CREATE_MISSED_SIGNAL_REFLECTIONS)
     conn.commit()
     return conn
 

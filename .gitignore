@@ -227,3 +227,6 @@ audit_out/
 backend/.import_linter_cache/
 backend/.complexipy_cache/
 backend/.quality/__pycache__/
+
+# 本地测试/覆盖率产物（CI 用 artifact 上传，不入库）
+backend/reports/
