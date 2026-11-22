@@ -146,6 +146,10 @@ def event_study(ctx, hours: int = 24 * 7, groups_min: int = 3) -> FeatureResult:
         groups.setdefault(s["action"], []).append(s)
     out = []
     for action, items in sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True):
+        # groups_min 以前只出现在签名里、从没参与筛选：1～2 条样本也能算出
+        # "t 值显著"，那是噪声不是结论。样本不足的分组直接不进统计（v536）。
+        if len(items) < groups_min:
+            continue
         entry = {"action": action, "n": len(items)}
         for key in ("r1", "r4", "r24"):
             vals = [s[key] * (s["direction"] or 1.0) for s in items if s[key] is not None]
@@ -160,6 +164,13 @@ def event_study(ctx, hours: int = 24 * 7, groups_min: int = 3) -> FeatureResult:
                           "p_value": round(2 * (1 - _phi(abs(tstat))), 4) if tstat else None,
                           "significant": bool(tstat and abs(tstat) >= 1.96)}
         out.append(entry)
+    if not out:
+        return FeatureResult.no_data(
+            "F60", "事件研究：分组样本不足",
+            f"每组至少 {groups_min} 个样本；当前最大组只有 "
+            f"{max(len(v) for v in groups.values())} 个",
+            evidence=ctx.evidence(tables=["news_events", "kline_bars"]),
+        )
     big = [g for g in out if isinstance(g.get("r24"), dict) and g["r24"]["significant"]]
     return FeatureResult.ok(
         "F60", f"事件研究：{len(samples)} 个事件，{len(big)} 组 24h 收益显著（|t|≥1.96）",

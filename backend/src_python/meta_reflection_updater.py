@@ -115,10 +115,39 @@ def _propose_new_blindspots(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     return new
 
 
-def _next_version(current_version: str) -> str:
-    """生成下一个版本号 (基于周次)"""
-    iso_week = datetime.now().isocalendar()
-    return '{}.w{}'.format(WEEKLY_VERSION_PREFIX, iso_week.week)
+_VERSION_LINE = re.compile(r'^## 自动追加: (\S+)', re.M)
+
+
+def _latest_version(content: Optional[str]) -> str:
+    """从已有 META_REFLECTION.md 里取最后一段追加用的版本号；没有就是 ''。"""
+    if not content:
+        return ''
+    hits = _VERSION_LINE.findall(content)
+    return hits[-1] if hits else ''
+
+
+def _week_version_base() -> str:
+    """本周版本号前缀（v202+.wNN，按 ISO 周）。"""
+    return '{}.w{}'.format(WEEKLY_VERSION_PREFIX, datetime.now().isocalendar().week)
+
+
+def _bump_within_week(base: str, tail: str) -> str:
+    """同一周重复追加时序号 +1：'' → .2，'.2' → .3；尾部不是数字就当作 .2。"""
+    seq = tail[1:]
+    return '{}.{}'.format(base, int(seq) + 1) if seq.isdigit() else base + '.2'
+
+
+def _next_version(current_version: str = '') -> str:
+    """生成下一个版本号：本周第一次是 v202+.wNN，同周再跑就是 .wNN.2 / .3 ...
+
+    以前直接忽略 current_version、只返回 .wNN —— 同一周跑两次会写出两个标题
+    完全一样的追加块，事后分不清哪块是哪一次。现在按已有版本号递增。
+    """
+    base = _week_version_base()
+    cur = str(current_version or '').strip()
+    if not cur.startswith(base):
+        return base
+    return _bump_within_week(base, cur[len(base):])
 
 
 def _read_meta_file(path: str) -> Optional[str]:
@@ -128,9 +157,13 @@ def _read_meta_file(path: str) -> Optional[str]:
         return f.read()
 
 
-def _build_new_block(old_summary: Dict[str, Any], new_blindspots: List[Dict[str, Any]],
+def _build_new_block(new_blindspots: List[Dict[str, Any]],
                       next_version: str, summary: Dict[str, Any]) -> str:
-    """构造要追加到 META_REFLECTION.md 的内容块"""
+    """构造要追加到 META_REFLECTION.md 的内容块。
+
+    以前这里还收一个 old_summary，但追加就是"只写新块、不动旧内容"，旧摘要
+    从没用过（调用方一直传 {}）。删掉，免得以为这里做了增量合并（v536）。
+    """
     lines = ['', '---', '', '## 自动追加: {} ({})'.format(next_version, TODAY), '']
     lines.append('### 本周盲区扫描')
     lines.append('')
@@ -170,14 +203,15 @@ def update_meta_reflection(meta_path: str = META_REFLECTION_PATH,
     try:
         summary = _scan_weekly_blindspots(week_start, conn=conn)
         new_blindspots = _propose_new_blindspots(summary)
-        next_version = _next_version('')
-
-        appended = _build_new_block({}, new_blindspots, next_version, summary)
 
         if not os.path.isabs(meta_path):
             backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             meta_path = os.path.join(backend_root, meta_path)
         old_content = _read_meta_file(meta_path)
+        # 先读文件再算版本号：同一周已经追加过就递增（.wNN.2 / .3），
+        # 不然两次运行的块标题一模一样。
+        next_version = _next_version(_latest_version(old_content))
+        appended = _build_new_block(new_blindspots, next_version, summary)
         old_size = len(old_content) if old_content else 0
         new_content = (old_content or '') + appended
         new_size = len(new_content)

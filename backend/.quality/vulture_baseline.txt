@@ -3,9 +3,9 @@
 # 修掉一个就从这里删一行 —— 这个文件只应该变短。
 
 #
-# ── 2026-11-22 累计清理：26 → 7 ───────────────────────────────────────────
+# ── 2026-11-22 累计清理：26 → 4 ───────────────────────────────────────────
 #
-# 第三轮（14 → 7）：两条"调用方传了、函数没用"被证实是真缺陷，选择**修实现**。
+# 第三轮（14 → 4）：两条"调用方传了、函数没用"被证实是真缺陷，选择**修实现**。
 #   missed_signal_reflection.py :: paper_run_id
 #     表里根本没这一列（DDL 只有 14 列），参数传进来每次被丢；多个模拟盘的漏检
 #     反思写进同一批行，事后分不清是哪次跑的。修法：补列 + 幂等迁移 + COALESCE
@@ -58,7 +58,18 @@
 #   而且少补 8 个兜底字段。功能没丢，只是代码脏。
 #   已删残留 + 新增 tests/test_judge_json_parse.py（8 条用例）锁住各种包裹形态。
 #
-# 下面 7 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
+# 第四轮（7 → 4）：三条"逻辑漏了一步"，全部选择修。
+#   meta_reflection_updater.py :: current_version / old_summary
+#     _next_version 不看已有版本号 → 同一周跑两次写出两个同名追加块；现在按
+#     已有版本号递增（.wNN → .wNN.2 → .3）。old_summary 则确认无用（追加只写新块、
+#     不合并旧内容），删参数。
+#   trident2/features/trust.py :: groups_min
+#     F60 事件研究的分组下限从没参与筛选，1～2 条样本也能算出"t 值显著"；现在
+#     样本不足的分组不进统计，全部不足则返回 no_data 而不是空结论。
+#   这两条也各被门禁拦过一次：_next_version 从 0 改到 4/5 都判"复杂度恶化"，
+#     final 版本把解析与递增拆成 _week_version_base / _bump_within_week。
+#
+# 下面 4 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
 # 这正是「工具查结构、查不出逻辑」的实例：vulture 只说"没人用"，
 # 说不清"为什么没人用"。三类原因要分开看。
 #
@@ -71,9 +82,6 @@
 #     就是让读代码的人知道这是故意不用，保留。
 #
 # ── 类型二：调用方传了、函数没用（输入被丢掉，改实现前先确认口径）────────────
-#   meta_reflection_updater.py :: current_version  _next_version 不看当前版本号
-#   meta_reflection_updater.py :: old_summary      _build_new_block 不看旧摘要
-#   trident2/features/trust.py :: groups_min       event_study 的分组下限未参与
 #
 # ── 类型三：结构性占位 / 停用代码（保留是有意的）────────────────────────
 #   bridge_server.py :: redundant if-condition
@@ -85,8 +93,5 @@
 
 src_python/bridge_server.py :: redundant if-condition
 src_python/capability_acceptance.py :: unused variable 'dbname'
-src_python/meta_reflection_updater.py :: unused variable 'current_version'
-src_python/meta_reflection_updater.py :: unused variable 'old_summary'
 src_python/quick_sim.py :: unused variable 'tp1_ratio_unused'
 src_python/seed_trade_reflections.py :: unreachable code after 'return'
-src_python/trident2/features/trust.py :: unused variable 'groups_min'
