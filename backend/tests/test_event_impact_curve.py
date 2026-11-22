@@ -51,7 +51,6 @@ def test_window_minutes_complete():
 def test_build_minimal_curve_returns_4_windows():
     c = eic.build_minimal_curve(
         elasticity_minutes=120,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.85,
         peak_after_minutes=15,
         asset_code="XAU",
@@ -67,7 +66,6 @@ def test_build_minimal_curve_returns_4_windows():
 def test_build_minimal_curve_with_zero_elasticity_returns_empty():
     c = eic.build_minimal_curve(
         elasticity_minutes=0,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.85,
         peak_after_minutes=15,
     )
@@ -77,7 +75,6 @@ def test_build_minimal_curve_with_zero_elasticity_returns_empty():
 def test_build_minimal_curve_uses_sample_now():
     c = eic.build_minimal_curve(
         elasticity_minutes=60,
-        price_at_event=100.0,
         delta_pct_at_peak=1.0,
         peak_after_minutes=10,
         sample_now=1234567890,
@@ -93,7 +90,6 @@ def test_build_minimal_curve_uses_sample_now():
 def test_serialize_deserialize_roundtrip():
     c = eic.build_minimal_curve(
         elasticity_minutes=60,
-        price_at_event=2400.0,
         delta_pct_at_peak=1.0,
         peak_after_minutes=10,
         asset_code="XAU",

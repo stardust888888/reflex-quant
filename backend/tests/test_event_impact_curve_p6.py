@@ -20,7 +20,6 @@ def test_build_sigmoid_curve_basic():
     from event_impact_curve import build_sigmoid_curve
     c = build_sigmoid_curve(
         elasticity_minutes=120,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.85,
         peak_after_minutes=15,
         asset_code="XAU",
@@ -39,7 +38,6 @@ def test_build_sigmoid_curve_zero_delta():
     from event_impact_curve import build_sigmoid_curve
     c = build_sigmoid_curve(
         elasticity_minutes=120,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.0,
         peak_after_minutes=15,
         asset_code="XAU",
@@ -53,7 +51,6 @@ def test_build_sigmoid_curve_no_elasticity():
     from event_impact_curve import build_sigmoid_curve
     c = build_sigmoid_curve(
         elasticity_minutes=0,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.85,
         peak_after_minutes=15,
     )

@@ -1198,7 +1198,7 @@ def test_v221_4_reversal_bullish_pivot():
     candles.append(_c(base + 6 * 600_000, 99.0 + 0.05, 99.2, 98.8, 99.0, 100))
     # bar 7: 大阳 body=+0.7%
     candles.append(_c(base + 7 * 600_000, 100.0, 100.9, 99.9, 100.7, 100))
-    rv = ad._reversal_score(candles, 7, lookback=6, decision_window=3, pct_th=0.6)
+    rv = ad._reversal_score(candles, 7, lookback=6, pct_th=0.6)
     assert rv is not None, f"前 6 根下跌 + 当前大阳 0.7% 应触发 bullish reversal"
     assert rv["direction"] == "bullish"
     assert rv["pivot"] == "low"
@@ -1213,7 +1213,7 @@ def test_v221_4_reversal_bearish_pivot():
         candles.append(_c(base + i * 600_000, p - 0.05, p + 0.2, p - 0.2, p, 100))
     candles.append(_c(base + 6 * 600_000, 100.0 - 0.05, 100.2, 99.8, 100.0, 100))
     candles.append(_c(base + 7 * 600_000, 100.0, 100.1, 99.2, 99.3, 100))
-    rv = ad._reversal_score(candles, 7, lookback=6, decision_window=3, pct_th=0.6)
+    rv = ad._reversal_score(candles, 7, lookback=6, pct_th=0.6)
     assert rv is not None, f"前 6 根上涨 + 当前大阴 0.7% 应触发 bearish reversal"
     assert rv["direction"] == "bearish"
     assert rv["pivot"] == "high"
@@ -1229,7 +1229,7 @@ def test_v221_4_reversal_below_threshold_returns_none():
     candles.append(_c(base + 6 * 600_000, 99.0 + 0.05, 99.2, 98.8, 99.0, 100))
     # bar 7: 微阳 body=+0.05%（< 0.6 阈值）→ 不触发
     candles.append(_c(base + 7 * 600_000, 99.95, 100.1, 99.85, 100.0, 100))
-    rv = ad._reversal_score(candles, 7, lookback=6, decision_window=3, pct_th=0.6)
+    rv = ad._reversal_score(candles, 7, lookback=6, pct_th=0.6)
     assert rv is None
 
 
@@ -1243,13 +1243,13 @@ def test_v221_4_reversal_same_direction_returns_none():
     candles.append(_c(base + 6 * 600_000, 99.0 + 0.05, 99.2, 98.8, 99.0, 100))
     # bar 7: 大阴 body=-0.7%（与下跌趋势同向）→ 不触发 reversal
     candles.append(_c(base + 7 * 600_000, 99.4, 99.5, 98.6, 98.7, 100))
-    rv = ad._reversal_score(candles, 7, lookback=6, decision_window=3, pct_th=0.6)
+    rv = ad._reversal_score(candles, 7, lookback=6, pct_th=0.6)
     assert rv is None, "下跌趋势中继续下跌不是反转"
 
 
 def test_v221_4_reversal_insufficient_history_returns_none():
     """样本不足（< lookback+1）→ None。"""
-    rv = ad._reversal_score(_flat_candles(5, 1_700_000_000_000), 5, 6, 3, 0.6)
+    rv = ad._reversal_score(_flat_candles(5, 1_700_000_000_000), 5, 6, 0.6)
     assert rv is None
 
 

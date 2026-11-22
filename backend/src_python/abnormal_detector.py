@@ -130,7 +130,9 @@ EVENT_ARROW_VOL_RATIO_THRESHOLD_BY_INTERVAL: Dict[int, float] = {
 #   「涨跌幅度大的转折点」= 局部极值（6 根窗口最高/最低）+ 短促反向（3 根内反向 ≥ 阈值%）。
 #   区别于 swing（多根累计同向）：reversal 必须是「方向反过来了」。
 REVERSAL_LOOKBACK = 6           # 找极值用的窗口
-REVERSAL_DECISION_WINDOW = 3    # 极值之后 N 根内出现反向
+# v536：删掉 REVERSAL_DECISION_WINDOW（"极值之后 N 根内出现反向"）。当前实现按
+# 单根 body + 近 lookback 趋势判反转，不需要"等 N 根确认"；这个常量只被当作
+# 参数传进 _reversal_score，然后被忽略。
 REVERSAL_PCT_THRESHOLD_BY_INTERVAL: Dict[int, float] = {
     180: 0.4,    # 3m: 4 根内反向 ≥ 0.4%
     300: 0.5,    # 5m
@@ -637,8 +639,7 @@ def _event_arrow_score(candles: List[List[Optional[float]]], idx: int,
 
 
 def _reversal_score(candles: List[List[Optional[float]]], idx: int,
-                    lookback: int, decision_window: int,
-                    pct_th: float) -> Optional[Dict[str, Any]]:
+                    lookback: int, pct_th: float) -> Optional[Dict[str, Any]]:
     """v221.4 — 单根反向大 K 线（用户：「必备出涨跌幅度大的转折点」）。
 
     设计要点：「反转」= 单根 |body| 显著 **且** 方向与近 lookback 根趋势相反。
@@ -653,6 +654,10 @@ def _reversal_score(candles: List[List[Optional[float]]], idx: int,
       3. 「反向幅度」≥ pct_th（近 lookback 根极值 vs 当前 close 差值）
 
     返回 {pct, pivot} 或 None。
+
+    v536：原来还有个 decision_window 参数，但实现里从未参与判断（条件 3 最终
+    简化成"单根 body ≥ pct_th"，见下方注释）。参数一直传一直丢，删掉，免得
+    读代码的人以为决策窗在筛选反转。
     """
     if idx < lookback + 1:
         return None
@@ -1092,8 +1097,7 @@ def scan_abnormals(
     if len(parsed) > REVERSAL_LOOKBACK + 1:
         seen_rev_ts: set = set()
         for idx in range(REVERSAL_LOOKBACK + 1, len(parsed)):
-            rv = _reversal_score(parsed, idx, REVERSAL_LOOKBACK,
-                                 REVERSAL_DECISION_WINDOW, rev_pct_th)
+            rv = _reversal_score(parsed, idx, REVERSAL_LOOKBACK, rev_pct_th)
             if not rv:
                 continue
             ts = int(parsed[idx][TS])
@@ -1633,8 +1637,7 @@ def scan_anomalies(candles: List[Any], *, limit: int = 12,
             ea = _event_arrow_score(parsed, i, ea_body_th, ea_vol_th)
             rv = None
             if i >= REVERSAL_LOOKBACK + 1:
-                rv = _reversal_score(parsed, i, REVERSAL_LOOKBACK,
-                                     REVERSAL_DECISION_WINDOW, rev_pct_th)
+                rv = _reversal_score(parsed, i, REVERSAL_LOOKBACK, rev_pct_th)
         except Exception:
             continue
         bar_ts_ms = parsed[i][TS]

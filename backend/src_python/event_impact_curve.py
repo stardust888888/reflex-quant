@@ -255,13 +255,17 @@ def deserialize_curve(blob: Optional[str]) -> Dict[str, Dict[str, Any]]:
 def build_minimal_curve(
     *,
     elasticity_minutes: Optional[int],
-    price_at_event: Optional[float],
     delta_pct_at_peak: Optional[float],
     peak_after_minutes: Optional[int],
     asset_code: str = "",
     sample_now: Optional[int] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """从 elasticity_window 各字段估算一条最小曲线（无具体行情数据）。"""
+    """从 elasticity_window 各字段估算一条最小曲线（无具体行情数据）。
+
+    v536：原签名有 price_at_event（事件当时价格），但从未参与计算 —— 这里只
+    算相对 delta_pct，不输出绝对价位。删掉参数，免得读代码的人以为曲线带
+    价格基准。
+    """
     if not elasticity_minutes or elasticity_minutes <= 0:
         return {}
     d_pct = float(delta_pct_at_peak or 0.0)
@@ -433,7 +437,6 @@ if __name__ == "__main__":
     print("=== build_minimal_curve ===")
     c = build_minimal_curve(
         elasticity_minutes=120,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.85,
         peak_after_minutes=15,
     asset_code="XAU",
@@ -454,7 +457,6 @@ if __name__ == "__main__":
 def build_sigmoid_curve(
     *,
     elasticity_minutes: Optional[int],
-    price_at_event: Optional[float],
     delta_pct_at_peak: Optional[float],
     peak_after_minutes: Optional[int],
     asset_code: str = "",
@@ -462,6 +464,9 @@ def build_sigmoid_curve(
     k_steepness: float = 0.02,
 ) -> Dict[str, Dict[str, Any]]:
     """Sigmoid-like 平滑衰减曲线（比线性更接近实际价格冲击形态）。
+
+    同 build_minimal_curve：v536 删掉了从未被使用的 price_at_event，
+    本函数只输出相对 delta_pct。
 
     模型：
       delta(t) = delta_peak / (1 + exp(k * (t - peak_minutes)))
@@ -611,7 +616,6 @@ if __name__ == "__main__":
     print("=== build_minimal_curve ===")
     c = build_minimal_curve(
         elasticity_minutes=120,
-        price_at_event=2400.0,
         delta_pct_at_peak=0.85,
         peak_after_minutes=15,
         asset_code="XAU",

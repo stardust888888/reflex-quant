@@ -79,7 +79,7 @@ for i in range(30, len(candles)):
     bc = ad._big_candle_score(cur, big_range_th, big_body_th)
     vol_z = ti.vol_zscore(sub_candles)
     ea = ad._event_arrow_score(candles, i, ea_body_th, ea_vol_th)
-    rv = ad._reversal_score(candles, i, ad.REVERSAL_LOOKBACK, ad.REVERSAL_DECISION_WINDOW, rev_pct_th) if i >= ad.REVERSAL_LOOKBACK + 1 else None
+    rv = ad._reversal_score(candles, i, ad.REVERSAL_LOOKBACK, rev_pct_th) if i >= ad.REVERSAL_LOOKBACK + 1 else None
     sw = ad._swing_score(candles, i, ad.SWING_LOOKBACK, swing_pct_th, swing_range_th) if i >= ad.SWING_LOOKBACK else None
     eng = ti.engulfing(sub_candles)
     macd_x = ti.macd_cross(sub_closes)
