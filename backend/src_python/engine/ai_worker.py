@@ -8819,6 +8819,43 @@ def _start_progress_thread() -> None:
         print(f"[PROGRESS] 心跳线程启动失败: {type(_hb_exc).__name__}", flush=True)
 
 
+_SIGNAL_SECTION_PREFIX = "[Reference Signals] 历史统计信号（实时提炼自已结算模拟交易，仅作参考）："
+# 参考信号的注入顺序（key → 中文标签）。顺序变了 prompt 也就变了，别随手调。
+_SIGNAL_GROUPS = (
+    ("assets", "品种"),
+    ("directions", "方向"),
+    ("phases", "阶段"),
+    ("strengths", "强度"),
+    ("intervals", "入场时机"),
+    ("combos", "品种×方向"),
+)
+
+
+def _signal_lines(items) -> list[str]:
+    """把一组历史统计信号压成最多 4 行短文本（注入 prompt 用）。"""
+    out = []
+    for it in items[:4]:
+        if it.get("summary"):
+            out.append(it["summary"])
+            continue
+        wr = f"{it['winrate'] * 100:.0f}%" if it.get("winrate") is not None else "?"
+        out.append(f"{it['label']}:{it['total']}笔 胜率{wr} 盈亏{it['total_pnl']:+.2f}%")
+    return out
+
+
+def _reference_signal_parts(sig: dict) -> list[str]:
+    """拼出 [Reference Signals] 的各组文本；没有可用组就返回 []。
+
+    原来这段是主循环里的 7 个连续 if，和"取信号 / 打印"混在一起。纯字符串
+    计算、不碰数据库也不 await，抽出来主循环少一层分支（v536）。
+    """
+    parts = []
+    for key, label in _SIGNAL_GROUPS:
+        if sig.get(key):
+            parts.append(label + " " + "; ".join(_signal_lines(sig[key])))
+    return parts
+
+
 async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
     """
     Concurrent batch processor.
@@ -9471,32 +9508,10 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         try:
             from review.review_agent import derive_reference_signals
 
-            def _sig_lines(items):
-                out = []
-                for it in items[:4]:
-                    if it.get("summary"):
-                        out.append(it["summary"])
-                    else:
-                        wr = f"{it['winrate'] * 100:.0f}%" if it.get("winrate") is not None else "?"
-                        out.append(f"{it['label']}:{it['total']}笔 胜率{wr} 盈亏{it['total_pnl']:+.2f}%")
-                return out
-
             sig = await loop.run_in_executor(None, derive_reference_signals)
-            sig_parts = []
-            if sig.get("assets"):
-                sig_parts.append("品种 " + "; ".join(_sig_lines(sig["assets"])))
-            if sig.get("directions"):
-                sig_parts.append("方向 " + "; ".join(_sig_lines(sig["directions"])))
-            if sig.get("phases"):
-                sig_parts.append("阶段 " + "; ".join(_sig_lines(sig["phases"])))
-            if sig.get("strengths"):
-                sig_parts.append("强度 " + "; ".join(_sig_lines(sig["strengths"])))
-            if sig.get("intervals"):
-                sig_parts.append("入场时机 " + "; ".join(_sig_lines(sig["intervals"])))
-            if sig.get("combos"):
-                sig_parts.append("品种×方向 " + "; ".join(_sig_lines(sig["combos"])))
+            sig_parts = _reference_signal_parts(sig)
             if sig_parts:
-                reference_signals = "[Reference Signals] 历史统计信号（实时提炼自已结算模拟交易，仅作参考）：" + " | ".join(sig_parts)
+                reference_signals = _SIGNAL_SECTION_PREFIX + " | ".join(sig_parts)
                 print(f"  [SIGNAL] 参考信号已注入 prompt ({len(sig_parts)} 组)", flush=True)
             else:
                 print("  [SIGNAL] 暂无参考信号", flush=True)
