@@ -3,3 +3,14 @@ pytest>=8
 # lint 门禁（CI 与 pre-commit 共用同一版本，规则见仓库根 ruff.toml）
 ruff==0.17.5
 pytest-cov>=5
+
+# ── 结构门禁（.github/workflows/quality.yml，统一入口 scripts/quality_gate.py）
+# 下限取 2026-11-22 本机实测通过的版本，避免不同版本给出不同结论。
+# import-linter：架构分层契约，配置在 backend/.importlinter
+import-linter>=2.17
+# vulture：死代码。只跑 --min-confidence 100（误报最低档），基线在 .quality/
+vulture>=2.16
+# deptry：依赖声明 vs 实际 import，配置在 backend/pyproject.toml
+deptry>=0.25
+# complexipy：认知复杂度（Rust 实现，全仓 6784 个函数约 3 秒）
+complexipy>=9.0

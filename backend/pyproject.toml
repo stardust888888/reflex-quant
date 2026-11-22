@@ -1,0 +1,38 @@
+# pyproject.toml — 只服务于工具配置，不改变打包与测试行为
+#
+# 为什么放在 backend/ 而不是仓库根：
+#   deptry / complexipy 的扫描根都是 backend/src_python，配置跟着扫描根走。
+#
+# 为什么这里没有 [tool.pytest.ini_options]：
+#   pytest 的配置仍在 backend/pytest.ini（pytest.ini 优先级高于 pyproject.toml），
+#   这个文件只承载 deptry 的规则。
+#
+# 关于 deptry 的取舍（2026-11-22 首次接入）：
+#   · DEP001（import 了但没声明）在本仓库**全量误报**：src_python 是平铺模块
+#     （441 个顶层 .py），`import audit`、`import ai_worker` 这类本地模块
+#     没有包前缀，deptry 只能当成第三方包。所以关掉 DEP001。
+#   · DEP003/DEP004/DEP005 同理：传递依赖、本地平台包、pip 内置包，
+#     噪音远大于收益。
+#   · 只保留 DEP002（声明了但没用到）—— 这是唯一能真正省事的规则：
+#     少一个装不上/装不完的包，Docker 镜像和 CI 都会快一点。
+
+[tool.deptry]
+ignore = ["DEP001", "DEP003", "DEP004", "DEP005"]
+# 只扫生产依赖。requirements-dev.txt 里是 pytest/ruff 这类工具，
+# 它们本来就不会被 src_python import，扫进来只会得到 3 条固定误报。
+requirements_files = ["requirements.txt"]
+
+# 包名 ≠ import 名，不映射的话 DEP002 会误报这两个"未使用"
+[tool.deptry.package_module_name_map]
+python-dotenv = "dotenv"
+websocket-client = "websocket"
+
+# ── DEP002 的已知存量（冻结，不新增）────────────────────────────────────
+# 2026-11-22 实测：以下三个包在 backend/ 下零 import。
+#   pandas / streamlit → 只有 dashboard/ 用（dashboard 有自己的 requirements.txt）
+#   ccxt              → 全仓库零引用（历史交易所对接残留）
+# 没有当场删掉，是因为它们可能被 Docker 镜像或未来脚本隐式依赖，
+# 而删依赖属于「改行为」；这条检查先只保证「不会再新增无用依赖」。
+# 想让这条真正发挥作用，先把它们从 requirements.txt 移除、再从下面删掉。
+[tool.deptry.per_rule_ignores]
+DEP002 = ["pandas", "ccxt", "streamlit"]

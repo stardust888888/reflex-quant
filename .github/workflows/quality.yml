@@ -1,0 +1,65 @@
+name: quality
+
+# 这个工作流只做一件事：**阻止结构退化**。
+#
+# 它不跑测试（那是 ci.yml 的事），只跑四个静态检查：
+#   import-linter  拆分出来的模块有没有偷偷反向 import 回去
+#   vulture        有没有新增没人用的变量 / 不可达代码
+#   deptry         依赖声明有没有和实际 import 脱节
+#   complexipy     巨型函数有没有继续变复杂
+#
+# 关键设计：**基线冻结**。历史存量（26 条 vulture、548 个 >25 复杂度函数）
+# 写在 backend/.quality/ 里，不阻塞 CI；只有「新增」和「恶化」才红。
+# 否则第一次接入就满屏红，结果一定是全体 ignore —— 等于没接。
+#
+# 这四项都不检查业务逻辑是否正确。闸门算得准不准，看 gate-baseline 那份表。
+
+on:
+  push:
+    branches: [main, master, github-clean]
+    paths:
+      - "backend/**"
+      - ".github/workflows/quality.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+  workflow_dispatch:
+
+jobs:
+  structure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      # 只要静态分析工具，不装项目运行依赖：四个检查全靠 AST 和依赖清单，
+      # 不需要 fastapi / ccxt 真的可 import，所以这一步十几秒就完。
+      - name: 安装质量工具
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 结构门禁
+        working-directory: backend
+        run: python scripts/quality_gate.py
+
+      - name: 结构现状贴到 Job Summary
+        if: always()
+        working-directory: backend
+        run: |
+          {
+            echo "## 结构门禁（自动生成）"
+            echo ""
+            echo '```'
+            python scripts/quality_gate.py 2>&1 | tail -30
+            echo '```'
+            echo ""
+            echo "基线文件：\`backend/.quality/\`（只应随修复变短，不随新功能变长）"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -318,7 +318,6 @@ def clean_counter_factual(text: Any, max_chars: int = 90) -> str:
         detail = "/".join(f"{c}×{n}" for c, n in sorted(counts.items()))
         return f"{detail}（共 {sum(counts.values())} 例事故，可信度已削弱）"[:max_chars]
     return raw[:max_chars]
-    return raw[:max_chars]
 
 
 def rank_insight_candidates(items: List[Dict[str, Any]], limit: int = 0) -> List[Dict[str, Any]]:

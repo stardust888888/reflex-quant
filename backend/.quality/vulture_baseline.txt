@@ -1,0 +1,29 @@
+# vulture 基线（--min-confidence 100）
+# 冻结于 2026-11-22。新增条目会让 quality 工作流变红；
+# 修掉一个就从这里删一行 —— 这个文件只应该变短。
+src_python/abnormal_detector.py :: unused variable 'decision_window'
+src_python/bets.py :: unused variable 'tol_days'
+src_python/bridge_server.py :: redundant if-condition
+src_python/capability_acceptance.py :: unused variable 'dbname'
+src_python/cron_tech_signals.py :: unreachable code after 'return'
+src_python/engine/ai_worker.py :: unused variable 'preferred_categories'
+src_python/engine/gate_replay_guard.py :: unreachable code after 'while'
+src_python/engine/worker_helpers.py :: unused variable 'child_reasoning'
+src_python/engine/worker_helpers.py :: unused variable 'preferred_categories'
+src_python/event_atom.py :: unused variable 'data_anchor_ts'
+src_python/event_atom.py :: unused variable 'event_window_minutes'
+src_python/event_impact_curve.py :: unused variable 'price_at_event'
+src_python/feeds/es_feed.py :: unsatisfiable 'ternary' condition
+src_python/feeds/nq_feed.py :: unsatisfiable 'ternary' condition
+src_python/health_check.py :: unused variable 'tail_lines'
+src_python/judge_worker.py :: unreachable code after 'return'
+src_python/kb_facade.py :: unreachable code after 'try'
+src_python/meta_reflection_updater.py :: unused variable 'current_version'
+src_python/meta_reflection_updater.py :: unused variable 'old_summary'
+src_python/missed_signal_reflection.py :: unreachable code after 'return'
+src_python/missed_signal_reflection.py :: unused variable 'paper_run_id'
+src_python/quick_sim.py :: unused variable 'tp1_ratio_unused'
+src_python/review/gate_reflection.py :: unreachable code after 'return'
+src_python/review/reflection_logic_analysis.py :: unreachable code after 'return'
+src_python/seed_trade_reflections.py :: unreachable code after 'return'
+src_python/trident2/features/trust.py :: unused variable 'groups_min'

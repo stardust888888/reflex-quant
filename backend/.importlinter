@@ -1,0 +1,68 @@
+# .importlinter — 架构分层契约
+#
+# 存在的唯一理由：2026-11-22 的三次拆分（prompt_blocks / insights_store /
+# attribution_store）是靠"人记得不许反向 import"守住的。人记不住，契约能记住。
+#
+# 契约只声明「方向」，不管「逻辑」——它保证拆分后的模块不会悄悄长回去，
+# 但绝不会告诉你业务算得对不对。那件事只能靠测试和真实样本。
+#
+# 跑法（PYTHONPATH 必须是 backend/src_python，因为仓库用的是平铺模块名）：
+#   cd backend && PYTHONPATH=src_python lint-imports
+
+[importlinter]
+root_packages =
+    review
+    engine
+    trident2
+    market
+    signals
+    feeds
+    common
+    analysis
+    repository
+
+# 允许契约里出现不在 root_packages 里的模块名（如 api_server、routers）：
+# 它们同样是平铺模块，只是没必要逐个登记。
+include_external_packages = True
+
+# ── 契约 1：拆出来的 store 层，不许反向依赖被它服务的巨型模块 ────────────
+# 为什么：拆分的收益是"改 store 不会碰主文件"，一旦反向 import 就成环，
+# 收益立刻归零，还会退化成"两个文件互相 import、谁也测不了"。
+[importlinter:contract:store-no-upward-import]
+name = store 层不得反向依赖 ai_worker / review_agent
+type = forbidden
+source_modules =
+    review.insights_store
+    review.attribution_store
+    engine.prompt_blocks
+forbidden_modules =
+    review.review_agent
+    engine.ai_worker
+    engine.worker_helpers
+
+# ── 契约 2：纯函数模块不得依赖运行态 ───────────────────────────────────
+# prompt_blocks 的定位是"读库 → 拼 prompt 片段"的无副作用函数集合。
+# 它一旦 import 了调度/网关/服务层，就不再是纯的，测试也没法离线跑。
+[importlinter:contract:prompt-blocks-pure]
+name = prompt_blocks 不得依赖服务层与调度层
+type = forbidden
+source_modules =
+    engine.prompt_blocks
+forbidden_modules =
+    engine.ai_worker
+    engine.worker_helpers
+    api_server
+    bridge_server
+    routers
+
+# ── 契约 3：review 子包内部不许成环 ───────────────────────────────────
+# 只查 review 包内部：新加的 store 模块之间必须无环，否则未来任何一处改动
+# 都要同时理解两个文件。
+[importlinter:contract:review-acyclic]
+name = review 子包内部无环
+type = layers
+layers =
+    review.review_agent
+    review.reflection_logic_analysis
+    review.insights_store
+    review.attribution_store

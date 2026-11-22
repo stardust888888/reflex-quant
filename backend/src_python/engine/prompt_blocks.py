@@ -548,7 +548,11 @@ def _load_insights_section() -> str:
     条数由 config.REVIEW_INSIGHTS_LIMIT 控制（默认不限 = 启用多少注入多少）。
     """
     try:
-        from review.review_agent import build_active_insights_section, seed_analysis_experience
+        # 直接依赖 insights_store，而不是 review_agent：
+        # review_agent 只是把这两个函数 re-export 出来（见 review_agent.py:82），
+        # 走它会把依赖链变成 prompt_blocks → review_agent → ai_worker → worker_helpers，
+        # 也就是和 ai_worker 成环。架构契约 .importlinter 会拦这种反向依赖。
+        from review.insights_store import build_active_insights_section, seed_analysis_experience
         try:
             seed_analysis_experience()  # 幂等播种硬铁律/软启发种子（首次分析写入）
         except Exception:
