@@ -373,11 +373,13 @@ def classify_missed_decision(conn: sqlite3.Connection, dec: Dict[str, Any],
 
 _INSERT_SQL = """
     INSERT INTO missed_signal_reflections
-        (decision_id, asset, action, dimension, subcategory,
+        (decision_id, paper_run_id, asset, action,
+         dimension, subcategory,
          root_cause, lesson, verification,
          move_pct, hit, confidence_at_time,
          reflection_text, evidence, created_at)
-    VALUES (?, ?, ?, ?, ?,
+    VALUES (?, ?, ?, ?,
+            ?, ?,
             ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?)
@@ -393,6 +395,10 @@ _INSERT_SQL = """
         hit=excluded.hit,
         confidence_at_time=COALESCE(excluded.confidence_at_time,
                                     missed_signal_reflections.confidence_at_time),
+        -- 首次写入的 run_id 优先：老行若已有真实 run_id，重跑（可能落到 -1 哨兵）
+        -- 不许把它覆盖掉，否则"这条属于哪次跑"就永久丢了。
+        paper_run_id=COALESCE(missed_signal_reflections.paper_run_id,
+                              excluded.paper_run_id),
         reflection_text=excluded.reflection_text,
         evidence=excluded.evidence
 """
@@ -493,7 +499,8 @@ def _upsert_one(conn: sqlite3.Connection, dec: Dict[str, Any],
     try:
         cur = conn.execute(
             _INSERT_SQL,
-            (decision_id, asset, str(dec.get("suggested_action") or "HOLD"),
+            (decision_id, int(paper_run_id),
+             asset, str(dec.get("suggested_action") or "HOLD"),
              dim, sub,
              root, lesson, verification,
              (float(outcome) if outcome is not None else None), hit, conf_val,
@@ -560,8 +567,10 @@ def run(conn: sqlite3.Connection, days: int = 1, limit: int = 500,
                     continue
             except Exception:
                 pass
-        # paper_run_id 是 INTEGER 列 —— 用该决策自己的模拟盘 run id;
-        # 没有就落到 -1 哨兵 (仍是 NOT NULL, 借此与结算行区分)。
+        # paper_run_id 落库（v535 补上）：用该决策自己的模拟盘 run id；
+        # 没有就落到 -1 哨兵（与"老行 paper_run_id NULL = 未知"区分开）。
+        # 这条注释以前写着"paper_run_id 是 INTEGER 列"，但表里当时并没有这一列，
+        # 参数传进来就丢了 —— 多盘写进同一批行分不清是哪次跑的。
         try:
             run_id = int(dec.get("paper_trading_run_id") or 0)
         except (TypeError, ValueError):

@@ -2576,6 +2576,7 @@ _CREATE_MISSED_SIGNAL_REFLECTIONS = """
         move_pct REAL,                         -- 决策后 N 天实际涨跌（%）；None = 取不到
         hit INTEGER,                           -- 1 = 涨跌达到 HIT_MOVE_THRESHOLD_PCT
         confidence_at_time REAL,               -- 当时置信度；None = 没算过
+        paper_run_id INTEGER,                   -- 哪一次模拟盘跑出来的；NULL = 老行/未知，-1 = 该决策不属于任何盘
         reflection_text TEXT NOT NULL DEFAULT '',
         evidence TEXT NOT NULL DEFAULT '{}',
         created_at TEXT NOT NULL DEFAULT ''
@@ -3978,6 +3979,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_MISSED_SIGNAL_REFLECTIONS)
     for _idx_sql in _MISSED_SIGNAL_REFLECTIONS_INDEXES:
         conn.execute(_idx_sql)
+    # v535 (2026-11-22): 补 paper_run_id。建表时漏了这一列，但写入侧
+    # （missed_signal_reflection._upsert_one）一直按"表里有这一列"在算 run_id ——
+    # 结果多个模拟盘写进同一批行，事后无法区分是哪一次跑出来的。
+    # 老库用 ALTER 补；历史行保持 NULL（= 未知），不用 0 顶替。
+    _ensure_columns(conn, "missed_signal_reflections", [
+        ("paper_run_id", "INTEGER"),
+    ])
     conn.execute(_CREATE_ERROR_CODE_LEDGER)
     for _idx_sql in _ERROR_CODE_LEDGER_INDEXES:
         try:

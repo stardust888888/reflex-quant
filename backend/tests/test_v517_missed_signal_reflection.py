@@ -289,10 +289,83 @@ def test_rerun_upserts_instead_of_duplicating(db):
     assert rows[0][1] == 0  # 后一次的结果覆盖前一次
 
 
+def test_insert_columns_exist_in_ddl():
+    """守卫：INSERT 写的每一列，建表 DDL 里都必须真的有。
+
+    v535 之前的真事故：_upsert_one 按"表里有 paper_run_id"在写，DDL 里却没有
+    这一列 —— 参数传进去直接被 SQL 拒绝/丢弃，静默丢字段。这类"代码与表结构
+    各说各话"的错，跑一次列比对就能拦住。
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute(msr._db._CREATE_MISSED_SIGNAL_REFLECTIONS)
+    cols = {r[1] for r in conn.execute(
+        "PRAGMA table_info(missed_signal_reflections)")}
+    head = msr._INSERT_SQL.split("VALUES")[0]
+    insert_cols = {c.strip() for c in
+                   head[head.index("(") + 1:head.index(")")].split(",") if c.strip()}
+    missing = insert_cols - cols
+    assert not missing, "INSERT 写了表里没有的列: %s" % sorted(missing)
+
+
+def test_legacy_table_gets_the_column_via_ensure_columns():
+    """老库：表已存在但没有 paper_run_id，迁移必须能补上，且重复跑不报错。"""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE missed_signal_reflections (id INTEGER PRIMARY KEY, "
+                 "decision_id INTEGER NOT NULL UNIQUE, asset TEXT)")
+    assert "paper_run_id" not in {r[1] for r in conn.execute(
+        "PRAGMA table_info(missed_signal_reflections)")}
+    for _ in range(2):  # 幂等
+        msr._db._ensure_columns(conn, "missed_signal_reflections",
+                                [("paper_run_id", "INTEGER")])
+    assert "paper_run_id" in {r[1] for r in conn.execute(
+        "PRAGMA table_info(missed_signal_reflections)")}
+
+
 def test_decision_without_id_is_skipped(db):
     dec = _dec(db, 1)
     dec["id"] = 0
     assert msr._upsert_one(db, dec, 1, T) is None
+
+
+# ── 模拟盘归属（v535 补 paper_run_id 列）──────────────────────
+def test_paper_run_id_is_persisted(db):
+    """落库必须带 paper_run_id。
+
+    建表时漏了这一列，但写入侧一直接参数在算 run_id —— 结果多个模拟盘写进
+    同一批行，事后无法区分是哪一次跑出来的，复盘追溯就断了。
+    """
+    _dec(db, 1, forward_move_pct=2.0, paper_trading_run_id=7)
+    msr.run(db, days=30, now_ts=T)
+    rid = db.execute(
+        "SELECT paper_run_id FROM missed_signal_reflections WHERE decision_id=1"
+    ).fetchone()[0]
+    assert rid == 7
+
+
+def test_missing_run_id_falls_back_to_sentinel(db):
+    """决策不属于任何盘时落 -1 哨兵。
+
+    NULL 必须留给"老行、归属未知"——两者语义不同，不能混成同一个值。
+    """
+    _dec(db, 1, forward_move_pct=2.0, paper_trading_run_id=None)
+    msr.run(db, days=30, now_ts=T)
+    rid = db.execute(
+        "SELECT paper_run_id FROM missed_signal_reflections WHERE decision_id=1"
+    ).fetchone()[0]
+    assert rid == -1
+
+
+def test_rerun_keeps_the_known_run_id(db):
+    """重跑时不许把已落的真实 run_id 覆盖成 -1 哨兵。"""
+    _dec(db, 1, forward_move_pct=3.0, paper_trading_run_id=7)
+    msr.run(db, days=30, now_ts=T)
+    db.execute("UPDATE ai_decisions SET paper_trading_run_id=NULL WHERE id=1")
+    db.commit()
+    msr.run(db, days=30, now_ts=T)
+    rid = db.execute(
+        "SELECT paper_run_id FROM missed_signal_reflections WHERE decision_id=1"
+    ).fetchone()[0]
+    assert rid == 7
 
 
 def test_degraded_decisions_produce_no_reflection(db):
