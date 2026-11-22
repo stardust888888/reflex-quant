@@ -17,6 +17,7 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import db # v189-8: 用于 db.retry_on_busy 包 _batch_claim 的 UPDATE RETURNING
@@ -8933,6 +8934,29 @@ def _do_claim(conn) -> List[sqlite3.Row]:
     return rows
 
 
+@dataclass
+class _BatchPersistCtx:
+    """`_batch_persist` 依赖的外层状态（14 个闭包变量的显式化，v536）。
+
+    这些变量原本靠闭包从 `ai_worker` 里读；显式打包后才能把这个 2191 行的落库
+    函数拆成若干可单独测试的模块级片段。字段全部只读语义（函数内不做整体替换）。
+    """
+    successes: Any
+    batch: Any
+    content_map: Dict[int, str]
+    published_map: Dict[int, Any]
+    timestamp_map: Dict[int, Any]
+    model_pool: Any
+    gate_verdict_map: Dict[int, Any]
+    gate_strength_map: Dict[int, Any]
+    gate_impact_map: Dict[int, Any]
+    market_context: str
+    decision_context: str
+    batch_end: Any
+    loop: Any
+    failures: Any
+
+
 def _main_budget_exhausted() -> bool:
     """v431：主分析日预算闸（第二道防烧穿闸）。
 
@@ -10009,7 +10033,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         # ==================================================================
         # Phase 3 - Batch persist (model label in reasoning prefix)
         # ==================================================================
-        def _batch_persist():
+        def _batch_persist(ctx):
             """
             Two-phase merge:
               Phase 3a — primary model results: INSERT ai_decisions (aggregation, entry price).
@@ -10059,14 +10083,14 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                 # ============================================================
                 # 多模型分片：所有成功结果都属主分析池（无 Doubao 时无 secondary）
                 # 多品种：sibling_decisions 拆成独立 decision 条目（各品种独立交易信号）
-                primary_results = _expand_multi_asset_results(successes)
+                primary_results = _expand_multi_asset_results(ctx.successes)
 
                 # 单源开关只过滤模拟盘交易（不影响新闻采集/分析入库）：
                 # 建仓前按该新闻的 source 查 news_sources 开关。
                 news_source_settings = news_sources.get_settings(conn)
                 source_map = {
                     row["id"]: row["source"] if "source" in row.keys() else ""
-                    for row in batch
+                    for row in ctx.batch
                 }
 
                 # 规则事件结构化提取按 news_id 缓存：主行/副行复用，避免重复 re 抽取
@@ -10078,7 +10102,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # v176：schema 必填字段强制达标
                     try:
                         res = _presanitize_for_schema(
-                            res, str((content_map or {}).get(s.get("news_id")) or ""))
+                            res, str((ctx.content_map or {}).get(s.get("news_id")) or ""))
                     except Exception:
                         pass
                     # v342 观测：把"降级"落一行，让"哪一步坏的"可量化（不改判定）
@@ -10092,7 +10116,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # P1-5 服务端兜底：即便 P0-2 retry 失败、LLM 漏填 4 字段，也强制填出 N/A
                     # 用 published_map / timestamp_map 推 ISO 时间，避免 ai_decisions 16.1 字段 0%
                     _nid = s.get("news_id")
-                    _pub = published_map.get(_nid, "") if _nid else ""
+                    _pub = ctx.published_map.get(_nid, "") if _nid else ""
                     # v1 重构：消费 _unclassified_* 标记 → 写 unclassified_events 表
                     _consume_unclassified_marker(
                         res, news_id=_nid,
@@ -10101,8 +10125,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     _ts_iso = ""
                     if _pub:
                         _ts_iso = _pub[:32]
-                    elif _nid and _nid in timestamp_map:
-                        _ts_iso = timestamp_map[_nid][:32]
+                    elif _nid and _nid in ctx.timestamp_map:
+                        _ts_iso = ctx.timestamp_map[_nid][:32]
                     res = _auto_fill_required_fields(
                         res,
                         snapshot_ts_iso=_ts_iso,
@@ -10132,7 +10156,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                                         break
                                     except Exception:
                                         continue
-                            _row_ts = timestamp_map.get(_nid, "")
+                            _row_ts = ctx.timestamp_map.get(_nid, "")
                             if _pub_dt and _row_ts:
                                 _row_dt = _dt.strptime(_row_ts[:19], "%Y-%m-%d %H:%M:%S")
                                 _delta_min = int((_pub_dt - _row_dt).total_seconds() / 60.0)
@@ -10159,12 +10183,12 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # 本行"分析模型"标记：优先真实调用模型；缺失时才退回运行配置，
                     # 但运行配置可能过期（不在当前模型池内）→ 那就不用它，退回本批模型，
                     # 否则前端会显示一个早已废弃的通道（实测遗留 gpt-5.4-mini）。
-                    _pool_ids = {m["id"] for m in model_pool}
+                    _pool_ids = {m["id"] for m in ctx.model_pool}
                     _run_model = str((active_run or {}).get("model_id") or "")
                     _model_for_row = (
                         str(res.get("model_id") or "").strip()
                         or (_run_model if _run_model in _pool_ids else "")
-                        or (model_pool[0]["id"] if model_pool else "")
+                        or (ctx.model_pool[0]["id"] if ctx.model_pool else "")
                     )
                     done_news_ids.add(nid)
                     tagged_reason = f"[{label}] {res['reasoning']}"
@@ -10255,8 +10279,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # 进入此处的 _batch_claim 都是 gate_verdict="可交易" 或历史老数据）。
                     # 保留 strength>=thr 的 STRONG-PASS 兜底：旧"只能看"数据如有遗留，
                     # 仍按 v176.5c 信任 LLM 自评的强信号。
-                    _gate_verdict = str(gate_verdict_map.get(nid, ""))
-                    _gate_strength = int(gate_strength_map.get(nid, 0) or 0)
+                    _gate_verdict = str(ctx.gate_verdict_map.get(nid, ""))
+                    _gate_strength = int(ctx.gate_strength_map.get(nid, 0) or 0)
                     _GATE_PASS_THR = int(os.getenv("GATE_PASS_STRENGTH", "5"))  # 可调，默认 5（v176.5d）
                     if _gate_strength >= _GATE_PASS_THR:
                         # 不动 action, 让 LLM 给的 BUY/SELL 落库; 若 LLM 给 HOLD 也保留 HOLD
@@ -10324,7 +10348,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # 判断，用主新闻 VIP 放大会失真（地缘新闻若含 VIP 人物，不应把
                     # 副品种 XAU 的分数也 ×1.25）。
                     is_sibling_row = bool(s.get("is_sibling"))
-                    news_text_for_vip = content_map.get(nid, "")
+                    news_text_for_vip = ctx.content_map.get(nid, "")
                     vip_tag, vip_name = _detect_vip(news_text_for_vip)
                     if (not is_sibling_row) and vip_tag and action in ("BUY", "SELL"):
                         boosted = round(score * VIP_SCORE_BOOST, 4)
@@ -10363,7 +10387,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     if (not is_sibling_row) and HERMES_AGENT_ENABLED and action in ("BUY", "SELL"):
                         try:
                             hv = hermes_agent.desk_direction_votes(
-                                content_map.get(nid, ""), market_context, asset)
+                                ctx.content_map.get(nid, ""), ctx.market_context, asset)
                             tally = hermes_agent.desk_vote_summary(hv, action)
                             if tally["dissent"]:
                                 factor = 0.8
@@ -10423,8 +10447,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # v336：统一走 resolve_impact_score —— 模型缺失/恰为 5.0 时用门卫分
                     # （旧实现只覆盖"恰为 5.0"，而 _parse_result 会把缺失写成 5.0,
                     #  两者本来是同一个值，所以门卫分在多数路径上并没被用上）
-                    _gate_imp = int(gate_impact_map.get(nid, 0) or 0)
-                    _gate_str = int(gate_strength_map.get(nid, 0) or 0)
+                    _gate_imp = int(ctx.gate_impact_map.get(nid, 0) or 0)
+                    _gate_str = int(ctx.gate_strength_map.get(nid, 0) or 0)
                     impact_score, _impact_src = resolve_impact_score(
                         res.get("impact_score"), _gate_imp, gate_strength=_gate_str)
                     # v397：把"这个分从哪来"落进 field_sources ——
@@ -10481,7 +10505,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             "suggested_action": action,
                             "target_asset": asset,
                             "market_confirmation": mkt_confirm,
-                            "decision_context": decision_context,
+                            "decision_context": ctx.decision_context,
                             "cluster_size": _cluster_hint_pre,
                             "history_sample": _history_sample_pre,
                             "heat_score": heat_score,
@@ -10635,7 +10659,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                         try:
                             from event_struct import extract_events as _extract_events
                             event_struct_json = json.dumps(
-                                _extract_events(content_map.get(nid, "") or ""), ensure_ascii=False
+                                _extract_events(ctx.content_map.get(nid, "") or ""), ensure_ascii=False
                             )[:1000]
                         except Exception:
                             event_struct_json = ""
@@ -10652,7 +10676,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             "SELECT COUNT(*) FROM event_atom WHERE raw_news_id=?", (nid,)
                         ).fetchone()[0]
                         _event_atom.extract_and_persist(
-                            content_map.get(nid, "") or "",
+                            ctx.content_map.get(nid, "") or "",
                             raw_news_id=int(nid),
                             default_event_time=_news_ts,
                             event_time_source="ai_worker_review",
@@ -11174,7 +11198,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             score,
                             action,
                             tagged_reason,
-                            batch_end,
+                            ctx.batch_end,
                             category,
                             asset,
                             parent_id,
@@ -11194,7 +11218,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             evt_strength,
                             direct_cat,
                             tf_match,
-                            decision_context,
+                            ctx.decision_context,
                             current_strategy["id"],
                             active_version["id"],
                             heat_score,
@@ -11601,7 +11625,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             _noi = str(res.get("net_origin_info") or "").strip()[:200]
                             _cn_ts_raw = str(res.get("cross_net_first_seen_ts") or "").strip()[:32]
                             _cn_src = str(res.get("cross_net_source") or "").strip()[:300]
-                            _our_ts = timestamp_map.get(nid, "") or ""
+                            _our_ts = ctx.timestamp_map.get(nid, "") or ""
                             _cn_ts = _validate_cross_net_ts(_cn_ts_raw, _cn_src, _our_ts)
                             # source 只在 ts 校验通过时写入；空串/失败时 source 也清空，避免误用
                             if not _cn_ts:
@@ -11675,7 +11699,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                         "surprise": _surprise_block,
                         "fundamental": _fund_block,
                         "market_confirmation": mkt_confirm,
-                        "decision_context": decision_context,
+                        "decision_context": ctx.decision_context,
                         "cluster_size": cluster_hint,
                         "history_sample": history_sample,
                         # 影响评估（0-10）参与闸门加权
@@ -11797,7 +11821,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             gate_reason=str(gate_reason or ""),
                             # 新闻年龄用本批的 timestamp_map（pre_ts 属于 _process_single 作用域，
                             # 这里是 ai_worker 主循环，取不到）
-                            news_age_min=_news_age_minutes(timestamp_map.get(nid, "") or ""),
+                            news_age_min=_news_age_minutes(ctx.timestamp_map.get(nid, "") or ""),
                         )
                     except Exception as _ntr_e:
                         print(f"  [NO-TRADE-REASON] 派生失败（保留空串）: "
@@ -11869,8 +11893,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                     # 优先用"平台声称的发布时间"计算年龄——防平台补发旧闻刚入库被当新鲜；
                     # 无平台时间（WS/webhook 实时流）时回落入库时间（到达即发布）。
                     max_age_sec = _get_news_trade_max_age_seconds()
-                    pub_raw = published_map.get(nid, "") or ""
-                    age_basis = pub_raw if pub_raw else timestamp_map.get(nid, "")
+                    pub_raw = ctx.published_map.get(nid, "") or ""
+                    age_basis = pub_raw if pub_raw else ctx.timestamp_map.get(nid, "")
                     news_age = _news_age_minutes(age_basis)
                     news_fresh = news_age is None or news_age * 60 <= max_age_sec
                     if not news_fresh:
@@ -11898,7 +11922,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                         # （fire-and-forget，不阻塞开仓与事件循环）。结果由后续分析的
                         # _openrouter_healthy() 读取，用于判断是否切 MiniMax 备用通道。
                         try:
-                            loop.run_in_executor(None, _probe_openrouter_if_stale)
+                            ctx.loop.run_in_executor(None, _probe_openrouter_if_stale)
                         except Exception:
                             pass
                         entry_price_val = _get_current_price(asset)
@@ -12119,13 +12143,13 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                 # ============================================================
                 # Phase 3b — Doubao UPDATE — merge into existing primary model rows
                 # ============================================================
-                doubao_results = [s for s in successes if s["model_label"] == "Doubao"]
+                doubao_results = [s for s in ctx.successes if s["model_label"] == "Doubao"]
                 for d in doubao_results:
                     nid = d["news_id"]
                     res = _sanitize_llm_result(d.get("result") or {})
                     try:
                         res = _presanitize_for_schema(
-                            res, str((content_map or {}).get(d.get("news_id")) or ""))
+                            res, str((ctx.content_map or {}).get(d.get("news_id")) or ""))
                     except Exception:
                         pass
                     # v1 重构：消费 _unclassified_* 标记 → 写 unclassified_events
@@ -12161,7 +12185,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                 # 通道/额度类失败不计重试次数，只退回 PENDING 等额度恢复。
                 # v536：_CHANNEL_FAIL_KW 与 _is_channel_failure 已提到模块级
                 # （原来定义在这里，只被下面这一处循环用；常量与判定放一起更好找）
-                for f in failures:
+                for f in ctx.failures:
                     nid = f["news_id"]
                     if nid > 0 and nid not in done_news_ids:
                         if _is_channel_failure(f.get("error")):
@@ -12205,10 +12229,27 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         max_retries = 6
         retry_delay = 0.5  # 秒
         decision_infos = []
+        # v536：落库所需的外层状态显式打包（原来靠 14 个闭包变量传进去）
+        _persist_ctx = _BatchPersistCtx(
+            successes=successes,
+            batch=batch,
+            content_map=content_map,
+            published_map=published_map,
+            timestamp_map=timestamp_map,
+            model_pool=model_pool,
+            gate_verdict_map=gate_verdict_map,
+            gate_strength_map=gate_strength_map,
+            gate_impact_map=gate_impact_map,
+            market_context=market_context,
+            decision_context=decision_context,
+            batch_end=batch_end,
+            loop=loop,
+            failures=failures,
+        )
         try:
             for attempt in range(max_retries):
                 try:
-                    decision_infos = _batch_persist()
+                    decision_infos = _batch_persist(_persist_ctx)
                     # v424：落库成功 → 清掉 spool（成果已经在 ai_decisions 里了）
                     try:
                         _spool_clear()
