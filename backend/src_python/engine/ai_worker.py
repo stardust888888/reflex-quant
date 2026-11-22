@@ -8885,6 +8885,54 @@ async def _batch_heartbeat() -> None:
             return
 
 
+def _do_reclaim(conn) -> int:
+    """回滚卡死的 PROCESSING（v322 租约语义），返回回收条数。
+
+    只回收「不属本进程在办批次」的行：单批耗时可能远超 15 分钟（行情源全超时时
+    实测 42 分钟），若把在办批次当僵尸回收，批末的
+    `UPDATE ... WHERE status='PROCESSING'` 会匹配 0 行 → 一条都进不了 DONE →
+    队头那批被无限重认领 →「待分析」永不下降。租约过期（心跳停了 = 确实死了）
+    才不排除。
+    """
+    _skip = _active_batch_live_ids()
+    _sql, _params = _build_reclaim_sql(_skip)
+    _c = conn.execute(_sql, _params)
+    _n = _c.rowcount or 0
+    conn.commit()
+    return _n
+
+
+def _do_claim(conn) -> List[sqlite3.Row]:
+    """单次认领实际动作（被 db.retry_on_busy 包着调，拿锁失败可重试）。
+
+    v322：认领 SQL 带时效门槛（陈旧新闻不送去分析）。
+    v432/v450：窗口内有「新鲜可交易」→ 小批插队直跑（默认 8 条，AI_TRADEABLE_BATCH
+    可调）。原来只插 1 条是吞吐黑洞：实测 122 条可交易待分析、约 15 条/小时，
+    而入库 380 条/小时，队列只会越涨越高。
+    """
+    _fresh_tradeable = _has_fresh_tradeable(conn)
+    try:
+        _tb = max(1, int(os.getenv("AI_TRADEABLE_BATCH", "8") or 8))
+    except Exception:
+        _tb = 8
+    _sql_claim, _params_claim = _build_claim_sql(_tb if _fresh_tradeable else None)
+    if _fresh_tradeable:
+        print(f"  [BATCH] 检测到建仓窗口内的可交易行 → 小批插队直跑({_tb} 条)", flush=True)
+    # v322: 归档已移到主循环的独立步骤（_run_expire_stale_news）。
+    # 不再放这里的原因：归档与认领共用一个事务时，归档 UPDATE 一旦撞上 DB 锁
+    # → 整批认领一起失败（实测 "[BATCH] FAILED in 57.88s: database is locked"）。
+    rows = conn.execute(_sql_claim, _params_claim).fetchall()
+    # v406: 分析前范围前置过滤 —— 只丢「确定性越界」（桶标签/个股特征/category=股票），
+    # no_evidence 一律保留。同事务内完成，原子。默认关闭（曾误杀白银/宏观日历）。
+    try:
+        from analysis.prefilter import apply as _prefilter_apply
+        rows = _prefilter_apply(conn, rows)
+    except Exception as _pf_exc:
+        print(f"  [PREFILTER] 跳过（{type(_pf_exc).__name__}: {str(_pf_exc)[:80]}）", flush=True)
+    conn.commit()
+    return rows
+
+
 # v323：区分"分析失败"与"根本没拿到模型响应"。实测额度耗尽期间每批都是
 # 0/8 ok | 8 failed，失败原因全是通道熔断；而回写会 retry_count+1，三次之后
 # 这条新闻就被永久标 FAILED —— 一次额度事故就把新闻烧成死数据（全表 599 条
@@ -9141,21 +9189,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
             except Exception:
                 pass
 
-            def _do_reclaim():
-                # v322: 跳过本进程「正在处理」的批次（租约未过期）。
-                # 单批耗时可能远超 15 分钟（行情源全超时 → 实测 42 分钟），
-                # 看门狗若把在办批次当僵尸回收，批事务末尾
-                # `UPDATE ... WHERE status='PROCESSING'` 会匹配 0 行 →
-                # 一条都进不了 DONE → 队头那批被无限重认领 → 「待分析」永不下降。
-                # 租约过期（心跳停了 = 批次确实卡死/已死）→ 不再排除 → 正常回收。
-                _skip = _active_batch_live_ids()
-                _sql, _params = _build_reclaim_sql(_skip)
-                _c = _reclaim_conn.execute(_sql, _params)
-                _n = _c.rowcount or 0
-                _reclaim_conn.commit()
-                return _n
-
-            _reclaimed = db.retry_on_busy(_do_reclaim)
+            # v536：回收动作已提到模块级 _do_reclaim(conn)，租约语义见该函数 docstring
+            _reclaimed = db.retry_on_busy(lambda: _do_reclaim(_reclaim_conn))
             if _reclaimed:
                 print(f"  [WATCHDOG] 回收卡死 PROCESSING {int(_reclaimed)} 条 → "
                       f"retry_count+1（达 {_MAX_PENDING_RETRIES} 标 FAILED）", flush=True)
@@ -9286,43 +9321,9 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
             # v189-8: 包 retry_on_busy,UPDATE RETURNING 拿锁失败时 5s+退避重试,
             # 消除 14 次 [BATCH] FAILED in 36-74s (engine 旧版 60s 死等浪费).
             # 配合 busy_timeout=5s,单次最坏阻塞 ≈ 5.4s,失败即抛给外层打印.
-            def _do_claim():
-                # v322: 认领 SQL 带**时效门槛**（陈旧新闻不送去分析）
-                # v432: 窗口内有「新鲜可交易」→ 只认领 1 条，插队直跑
-                _fresh_tradeable = _has_fresh_tradeable(conn)
-                # v450（2026-11-18）：可交易插队**只认领 1 条**是吞吐黑洞 ——
-                # 实测 21:25 有 122 条可交易待分析，主分析每轮只跑 1 条 → 约 15 条/小时，
-                # 而入库 380 条/小时，队列只会越涨越高。
-                # 改成小批插队（默认 8，可用 AI_TRADEABLE_BATCH 调），保持"优先"但不堵死吞吐。
-                try:
-                    _tb = max(1, int(os.getenv("AI_TRADEABLE_BATCH", "8") or 8))
-                except Exception:
-                    _tb = 8
-                _sql_claim, _params_claim = _build_claim_sql(_tb if _fresh_tradeable else None)
-                if _fresh_tradeable:
-                    print(f"  [BATCH] 检测到建仓窗口内的可交易行 → 小批插队直跑({_tb} 条)", flush=True)
-                # v322: 归档已移到主循环的独立步骤（_run_expire_stale_news）。
-                # 不再放在这里的原因：归档与认领共用一个事务时，
-                # 归档 UPDATE 一旦撞上 DB 锁 → 整批认领一起失败（实测
-                # "[BATCH] FAILED in 57.88s: database is locked"）。
-                rows = conn.execute(
-                    _sql_claim,
-                    _params_claim,
-                ).fetchall()
-                # v406: 分析前范围前置过滤 —— 只丢「确定性越界」（桶标签/个股特征/
-                # category=股票），no_evidence 一律保留。同事务内完成，原子。
-                # 当天实测 gate:main = 14:1、92 条 PENDING 压着 → 这里省的是排队时间。
-                # 默认关闭（抽查发现 stock_hints 档会误杀白银/宏观日历）；
-                # 收紧判据并抽查通过后再用 ANALYSIS_PREFILTER=1 打开。
-                try:
-                    from analysis.prefilter import apply as _prefilter_apply
-                    rows = _prefilter_apply(conn, rows)
-                except Exception as _pf_exc:
-                    print(f"  [PREFILTER] 跳过（{type(_pf_exc).__name__}: {str(_pf_exc)[:80]}）", flush=True)
-                conn.commit()
-                return rows
+            # v536：认领动作已提到模块级 _do_claim(conn)，插队/预过滤语义见该 docstring
             try:
-                rows = db.retry_on_busy(_do_claim)
+                rows = db.retry_on_busy(lambda: _do_claim(conn))
                 if rows:
                     ids = [r["id"] for r in rows]
                     print(f"  [BATCH] claimed {len(rows)} rows in {_bt.time()-_t0:.2f}s (ids={ids[:5]})", flush=True)
