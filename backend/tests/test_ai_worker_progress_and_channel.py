@@ -69,6 +69,21 @@ def test_loop_step_refreshes_step_ts_every_round(tmp_path, monkeypatch):
     assert again != first - 3600
 
 
+def test_batch_heartbeat_ticks_then_stops(monkeypatch):
+    """批内心跳：每 tick 写一次 analyze，最多 30 次自行退出（不泄漏任务）。"""
+    calls = []
+
+    async def _noop_sleep(_sec):
+        return None
+
+    monkeypatch.setattr(aw.asyncio, "sleep", _noop_sleep)
+    monkeypatch.setattr(aw, "_log_progress", lambda step, **kw: calls.append(step))
+
+    aw.asyncio.run(aw._batch_heartbeat())
+
+    assert calls == ["analyze"] * 30
+
+
 def test_same_non_loop_step_keeps_step_ts(tmp_path, monkeypatch):
     """同一个非 loop step 连续写，不该反复刷新 step_ts（否则"卡住"永远看不出来）。"""
     monkeypatch.setattr(aw.config, "BASE_DIR", str(tmp_path))

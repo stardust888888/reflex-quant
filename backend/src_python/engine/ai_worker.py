@@ -8847,6 +8847,28 @@ def _log_progress(step: str, **extra: Any) -> None:
         pass
 
 
+async def _batch_heartbeat() -> None:
+    """批处理期间每 60s 写一次 progress（防止看门狗误杀在跑的批次）。
+
+    看门狗（scripts/engine_watchdog.py --threshold 600）按 progress 文件判活：
+    超过 10 分钟没更新就 kickstart 掉引擎。而 progress 原来 **只在批边界写**
+    （批开始 -> 批结束），一批 16 条的 wall time 可远超 10 分钟 → 看门狗把引擎
+    连同在跑的批次一起杀掉 → 决策永远出不来（实测 restart_count=707）。
+    批内每 60s 写一次，看门狗看得到"还在推进"，不再误杀。
+    """
+    _ticks = 0
+    while True:
+        await asyncio.sleep(60.0)
+        _ticks += 1
+        try:
+            _log_progress("analyze")
+        except Exception:
+            pass
+        # 最多 30 分钟，防止批次异常提前 return 时 ticker 泄漏
+        if _ticks >= 30:
+            return
+
+
 # v323：区分"分析失败"与"根本没拿到模型响应"。实测额度耗尽期间每批都是
 # 0/8 ok | 8 failed，失败原因全是通道熔断；而回写会 retry_count+1，三次之后
 # 这条新闻就被永久标 FAILED —— 一次额度事故就把新闻烧成死数据（全表 599 条
@@ -9086,27 +9108,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         _start_progress_thread()
 
         # -- v323 P0-1: 批内心跳（防止看门狗误杀在跑的批次）---------------
-        async def _batch_heartbeat() -> None:
-            """批处理期间每 60s 写一次 progress。
-
-            看门狗（scripts/engine_watchdog.py --threshold 600）按 progress 文件
-            判活：超过 10 分钟没更新就 kickstart 掉引擎。而 progress 原来
-            **只在批边界写**（批开始 -> 批结束），一批 16 条的 wall time 可远超
-            10 分钟 → 看门狗把引擎连同在跑的批次一起杀掉 → 决策永远出不来
-            （实测 engine_watchdog_state.json: restart_count=707）。
-            现在批内每 60s 写一次，看门狗看得到"还在推进"，不再误杀。
-            """
-            _ticks = 0
-            while True:
-                await asyncio.sleep(60.0)
-                _ticks += 1
-                try:
-                    _log_progress("analyze")
-                except Exception:
-                    pass
-                # 最多 30 分钟，防止批次异常提前 return 时 ticker 泄漏
-                if _ticks >= 30:
-                    return
+        # v536：函数体已提到模块级（只依赖 _log_progress 与 asyncio，闭包引用为 0）
 
         # ── 自愈看门狗：回收卡死的 PROCESSING ──
         # 按"认领时间 processing_at"判断（非新闻入库 ts）——claim 超过 15 分钟仍未
