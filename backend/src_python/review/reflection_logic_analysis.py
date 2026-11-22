@@ -566,8 +566,6 @@ def analyze_logic(reasoning: str) -> List[Dict[str, Any]]:
             print(f"[logic_analysis] {fn.__name__} failed: {type(exc).__name__}: {exc}", flush=True)
     return findings
 
-    return findings
-
 # ═══════════════════════════════════════════════════════════════════════════
 # DB 读写
 # ═══════════════════════════════════════════════════════════════════════════

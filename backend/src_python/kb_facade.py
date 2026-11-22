@@ -1039,4 +1039,3 @@ def find_similar_signals(
         return out
     finally:
         _close(own, conn)
-    return out

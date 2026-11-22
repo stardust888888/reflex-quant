@@ -154,8 +154,6 @@ def _sign_of(value: Any) -> int:
         return -1
     return 0
 
-    return 0
-
 
 def _has_price_bar(conn: sqlite3.Connection, asset: str, ts: int) -> Optional[bool]:
     """该资产在 ts 附近有没有行情数据。None = 查不到 (不是"没有")。"""

@@ -151,9 +151,18 @@ def write_baseline(vulture: set[str], complex_: dict[str, int]) -> None:
         "# 冻结于 2026-11-22。新增条目会让 quality 工作流变红；\n"
         "# 修掉一个就从这里删一行 —— 这个文件只应该变短。\n"
     )
-    VULTURE_BASE.write_text(
-        header + "\n".join(sorted(vulture)) + "\n", encoding="utf-8"
-    )
+    # --update 不该冲掉人写的解释。历史基线里以 # 开头的行（除这四行头）
+    # 一律原样保留 —— 那些注释说明的是"为什么这条不修"，比条目本身重要。
+    kept_comments: list[str] = []
+    if VULTURE_BASE.exists():
+        for ln in VULTURE_BASE.read_text(encoding="utf-8").splitlines():
+            s = ln.rstrip()
+            if s.startswith("#") and s.strip() not in header.strip().splitlines():
+                kept_comments.append(s)
+    body = header.rstrip("\n") + "\n"
+    if kept_comments:
+        body += "\n" + "\n".join(kept_comments).rstrip() + "\n\n"
+    VULTURE_BASE.write_text(body + "\n".join(sorted(vulture)) + "\n", encoding="utf-8")
     COMPLEX_BASE.write_text(
         json.dumps(dict(sorted(complex_.items())), indent=1, ensure_ascii=False) + "\n",
         encoding="utf-8",

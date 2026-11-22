@@ -126,7 +126,6 @@ def main() -> int:
             else:
                 print("[tech_signals] skip: no new bars")
             return 0
-            return 0
         res = _backfill_with_retry(conn, backfill, dry_run=args.dry_run,
                                    ignore_epoch=True)
 

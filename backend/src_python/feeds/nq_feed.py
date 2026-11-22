@@ -70,7 +70,7 @@ def fetch_nq() -> Optional[Dict[str, Any]]:
                 "source": _fast["source"],
                 "ts": int(now),
             }
-            _CACHE["nq" if False else "nq"] = {"ts": now, "data": _data}
+            _CACHE["nq"] = {"ts": now, "data": _data}
             return _data
     except Exception:
         pass

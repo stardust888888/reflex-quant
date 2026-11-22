@@ -73,7 +73,7 @@ def fetch_es() -> Optional[Dict[str, Any]]:
                 "source": _fast["source"],
                 "ts": int(now),
             }
-            _CACHE["es" if False else "es"] = {"ts": now, "data": _data}
+            _CACHE["es"] = {"ts": now, "data": _data}
             return _data
     except Exception:
         pass

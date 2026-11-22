@@ -214,4 +214,3 @@ def gate_reflection(asset: str, days: int = 3,
         "forward": forward,
         "reverse": reverse,
     }
-    return None

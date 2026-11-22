@@ -496,7 +496,6 @@ def main() -> int:
         except Exception as exc:
             print("[gate-replay] 轮次异常: %s: %s" % (type(exc).__name__, exc), flush=True)
         time.sleep(max(30.0, args.interval))
-    return 0
 
 
 if __name__ == "__main__":
