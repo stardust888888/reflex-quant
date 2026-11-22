@@ -8933,6 +8933,106 @@ def _do_claim(conn) -> List[sqlite3.Row]:
     return rows
 
 
+def _main_budget_exhausted() -> bool:
+    """v431：主分析日预算闸（第二道防烧穿闸）。
+
+    实测当日 2836 次调用里门卫吃掉 2473 次（96%）、main 只 167 次；门卫预算
+    （REALTIME_GATE_DAILY_BUDGET=300）已掐掉大头，这里给 main 再兜一道上限，
+    防止某个环节失控把配额烧空。超出后认领返回空 → 主循环空转等待，
+    新闻留在 PENDING 不会丢。
+    """
+    _mb = int(os.getenv("AI_MAIN_DAILY_BUDGET", "600") or 600)
+    if _mb <= 0:
+        return False
+    try:
+        _bc = _open_db()
+        _bn = _bc.execute(
+            "SELECT COUNT(*) FROM ai_call_stats WHERE purpose='main'"
+            " AND ts>=strftime('%s','now','localtime','start of day','utc')"
+        ).fetchone()[0]
+        _bc.close()
+        return int(_bn) >= _mb
+    except Exception:
+        return False
+
+
+def _dump_lock_diag(_bt_stk, _dt) -> None:
+    """v174：认领被锁超过 5s 时 dump 全部线程栈并列出持锁者（只诊断，不改状态）。"""
+    if _dt <= 5.0:
+        return
+    try:
+        import sys
+        import threading as _thr
+
+        def _w(s):
+            try:
+                os.write(1, (s + "\n").encode())
+            except Exception:
+                pass
+
+        _w(f"  [BATCH-DIAG] === ALL THREAD STACKS (lock blocked {_dt:.1f}s) ===")
+        for tid, frame in sys._current_frames().items():
+            _w(f"  [BATCH-DIAG] Thread {tid} "
+               f"(name={next((t.name for t in _thr.enumerate() if t.ident==tid), '?')}):")
+            for ln in _bt_stk.format_stack(frame, limit=15):
+                _w("    " + ln.rstrip())
+        _w(f"  [BATCH-DIAG] active threads: {_thr.active_count()}")
+    except Exception as _diag_err:
+        print(f"  [BATCH-DIAG] dump failed: {_diag_err}", flush=True)
+
+
+def _batch_claim() -> List[sqlite3.Row]:
+    """Phase 1 原子认领: PENDING → PROCESSING.
+
+    v174 修复: 用「单 UPDATE + RETURNING」替代 BEGIN IMMEDIATE 包裹,
+    消除与 ingest worker 长 INSERT 事务的持锁竞争.
+    - 旧逻辑(BEGIN IMMEDIATE): 先开事务,在 ingest 长事务未提交期间
+      busy_timeout 30s 后 SQLITE_BUSY → OperationalError,30s 浪费.
+    - 新逻辑: 直接单条 UPDATE 自动拿写锁直到语句结束,RETURNING 拿回
+      完整行（SQLite 3.35+ 支持, 与 ai_worker 其它位置一致）.
+    """
+    import time as _bt
+    import traceback as _bt_stk
+    # v536：日预算闸抽成 _main_budget_exhausted()，逻辑未变
+    if _main_budget_exhausted():
+        return []
+    _t0 = _bt.time()
+    conn = _open_db()
+    # v176.2: 临时 busy_timeout 8s → 30s 跟全局对齐, 避免长 ingest
+    # 持锁(>8s)时 _batch_claim 仍报 SQLITE_BUSY. ingest 的写入时间
+    # 通常 5-15s, 30s 才有足够冗余;同时全局 db.py/utils.py 已是 30s.
+    # v189-8: 30s → 5s 与 db.py / engine/utils.py 对齐, 配合 retry_on_busy
+    # 重试,_batch_claim 单次最坏阻塞 5s + 重试退避 ≈ 5.4s 兜底.
+    # v431（2026-11-17）：这里原来写死 5s，会把 db.py 全局的 20s 覆盖掉。
+    # 实测 1 小时 271 次 `database is locked`，多数就发生在认领这一句上
+    # （ingest 侧的写事务还没提交完）。统一到 20s：抢不到就等，不要立刻失败。
+    try:
+        conn.execute("PRAGMA busy_timeout=20000;")
+    except Exception:
+        pass
+    # v189-8: 包 retry_on_busy,UPDATE RETURNING 拿锁失败时 5s+退避重试,
+    # 消除 14 次 [BATCH] FAILED in 36-74s (engine 旧版 60s 死等浪费).
+    # 配合 busy_timeout=5s,单次最坏阻塞 ≈ 5.4s,失败即抛给外层打印.
+    # v536：认领动作已提到模块级 _do_claim(conn)，插队/预过滤语义见该 docstring
+    try:
+        rows = db.retry_on_busy(lambda: _do_claim(conn))
+        if rows:
+            ids = [r["id"] for r in rows]
+            print(f"  [BATCH] claimed {len(rows)} rows in {_bt.time()-_t0:.2f}s (ids={ids[:5]})", flush=True)
+        return rows
+    except Exception as _claim_exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        _dt = _bt.time()-_t0
+        print(f"  [BATCH] FAILED in {_dt:.2f}s: {type(_claim_exc).__name__}: {str(_claim_exc)[:100]}", flush=True)
+        # v536：线程栈 dump 抽成 _dump_lock_diag()（阈值 5s 不变）
+        _dump_lock_diag(_bt_stk, _dt)
+        return []
+    finally:
+        conn.close()
+
 # v323：区分"分析失败"与"根本没拿到模型响应"。实测额度耗尽期间每批都是
 # 0/8 ok | 8 failed，失败原因全是通道熔断；而回写会 retry_count+1，三次之后
 # 这条新闻就被永久标 FAILED —— 一次额度事故就把新闻烧成死数据（全表 599 条
@@ -9274,88 +9374,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         # ==================================================================
         # Phase 1 - Batch atomic claim
         # ==================================================================
-        def _batch_claim() -> List[sqlite3.Row]:
-            """Phase 1 原子认领: PENDING → PROCESSING.
-
-            v174 修复: 用「单 UPDATE + RETURNING」替代 BEGIN IMMEDIATE 包裹,
-            消除与 ingest worker 长 INSERT 事务的持锁竞争.
-            - 旧逻辑(BEGIN IMMEDIATE): 先开事务,在 ingest 长事务未提交期间
-              busy_timeout 30s 后 SQLITE_BUSY → OperationalError,30s 浪费.
-            - 新逻辑: 直接单条 UPDATE 自动拿写锁直到语句结束,RETURNING 拿回
-              完整行（SQLite 3.35+ 支持, 与 ai_worker 其它位置一致）.
-            """
-            import time as _bt
-            import traceback as _bt_stk
-            # v431（2026-11-17）：主分析日预算 —— 第二道防烧穿闸。
-            # 实测当日 2836 次调用里门卫吃掉 2473 次（96%）、main 只 167 次；
-            # 门卫预算（REALTIME_GATE_DAILY_BUDGET=300）已把大头掐掉，
-            # 这里再给 main 兜一道上限，防止某个环节失控又把配额烧空。
-            # 超出后认领直接返回空 → 主循环空转等待，新闻留在 PENDING 不会丢。
-            _mb = int(os.getenv("AI_MAIN_DAILY_BUDGET", "600") or 600)
-            if _mb > 0:
-                try:
-                    _bc = _open_db()
-                    _bn = _bc.execute(
-                        "SELECT COUNT(*) FROM ai_call_stats WHERE purpose='main'"
-                        " AND ts>=strftime('%s','now','localtime','start of day','utc')"
-                    ).fetchone()[0]
-                    _bc.close()
-                    if int(_bn) >= _mb:
-                        return []
-                except Exception:
-                    pass
-            _t0 = _bt.time()
-            conn = _open_db()
-            # v176.2: 临时 busy_timeout 8s → 30s 跟全局对齐, 避免长 ingest
-            # 持锁(>8s)时 _batch_claim 仍报 SQLITE_BUSY. ingest 的写入时间
-            # 通常 5-15s, 30s 才有足够冗余;同时全局 db.py/utils.py 已是 30s.
-            # v189-8: 30s → 5s 与 db.py / engine/utils.py 对齐, 配合 retry_on_busy
-            # 重试,_batch_claim 单次最坏阻塞 5s + 重试退避 ≈ 5.4s 兜底.
-            # v431（2026-11-17）：这里原来写死 5s，会把 db.py 全局的 20s 覆盖掉。
-            # 实测 1 小时 271 次 `database is locked`，多数就发生在认领这一句上
-            # （ingest 侧的写事务还没提交完）。统一到 20s：抢不到就等，不要立刻失败。
-            try:
-                conn.execute("PRAGMA busy_timeout=20000;")
-            except Exception:
-                pass
-            # v189-8: 包 retry_on_busy,UPDATE RETURNING 拿锁失败时 5s+退避重试,
-            # 消除 14 次 [BATCH] FAILED in 36-74s (engine 旧版 60s 死等浪费).
-            # 配合 busy_timeout=5s,单次最坏阻塞 ≈ 5.4s,失败即抛给外层打印.
-            # v536：认领动作已提到模块级 _do_claim(conn)，插队/预过滤语义见该 docstring
-            try:
-                rows = db.retry_on_busy(lambda: _do_claim(conn))
-                if rows:
-                    ids = [r["id"] for r in rows]
-                    print(f"  [BATCH] claimed {len(rows)} rows in {_bt.time()-_t0:.2f}s (ids={ids[:5]})", flush=True)
-                return rows
-            except Exception as _claim_exc:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                _dt = _bt.time()-_t0
-                print(f"  [BATCH] FAILED in {_dt:.2f}s: {type(_claim_exc).__name__}: {str(_claim_exc)[:100]}", flush=True)
-                # v174 诊断: 长 lock 时 dump 所有活跃线程栈 + 列出持锁者
-                if _dt > 5.0:
-                    try:
-                        import sys
-                        import threading as _thr
-                        # os 已在模块顶部导入；此前这里二次 import 会让 os 变成函数局部变量，
-                        # 使本函数前半段 os.getenv(AI_MAIN_DAILY_BUDGET) 抛 UnboundLocalError。
-                        def _w(s):
-                            try: os.write(1, (s + "\n").encode())
-                            except Exception: pass
-                        _w(f"  [BATCH-DIAG] === ALL THREAD STACKS (lock blocked {_dt:.1f}s) ===")
-                        for tid, frame in sys._current_frames().items():
-                            _w(f"  [BATCH-DIAG] Thread {tid} (name={next((t.name for t in _thr.enumerate() if t.ident==tid), '?')}):")
-                            for ln in _bt_stk.format_stack(frame, limit=15):
-                                _w("    " + ln.rstrip())
-                        _w(f"  [BATCH-DIAG] active threads: {_thr.active_count()}")
-                    except Exception as _diag_err:
-                        print(f"  [BATCH-DIAG] dump failed: {_diag_err}", flush=True)
-                return []
-            finally:
-                conn.close()
+        # v536：认领逻辑整体已提到模块级 _batch_claim()（闭包引用 0）
 
         # ==================================================================
         # Phase 0 — Pull market snapshot (once per batch, before LLM calls)

@@ -1,9 +1,9 @@
 # 结构体检：`ai_worker()`
 
 - 文件：`src_python/engine/ai_worker.py`
-- 位置：第 8987–12341 行（**3355 行**，全文件 12341 行）
-- 分支（AST 近似）：**810**；最大嵌套深度：**13**
-- `await`：14 处；数据库/文件写调用：109 处
+- 位置：第 9087–12360 行（**3274 行**，全文件 12360 行）
+- 分支（AST 近似）：**791**；最大嵌套深度：**13**
+- `await`：14 处；数据库/文件写调用：102 处
 - 顶层语句：26 条 → 纯计算块 2 段 / IO·并发边界 2 段
 
 ## 嵌套函数（已天然独立，可优先提升）
@@ -12,23 +12,21 @@
 
 | 函数 | 行 | 行数 | await | 闭包引用 | 名字 |
 |---|---|---|---|---|---|
-| `_batch_claim` | 9277–9358 | 82 | 0 | 6 | `_bt`, `_bt_stk`, `_claim_exc`, `_diag_err`, `_thr` … |
-| `_batch_persist` | 9993–12183 | 2191 | 0 | 98 | `_BATCH_RETRY_COOLDOWN_SEC`, `_MAX_PENDING_RETRIES`, `_RESCUE_SF_STATE`, `_RESCUE_STATE`, `_ac_v400` … |
-| `_w` | 9345–9347 | 3 | 0 | 0 | — |
+| `_batch_persist` | 10012–12202 | 2191 | 0 | 98 | `_BATCH_RETRY_COOLDOWN_SEC`, `_MAX_PENDING_RETRIES`, `_RESCUE_SF_STATE`, `_RESCUE_STATE`, `_ac_v400` … |
 
 ## 纯计算块（无 await、不碰数据库写 —— 拆分从这里开始最安全）
 
 | 行区间 | 语句数 | 首句 |
 |---|---|---|
-| 8988–9042 | 5 | `'\n    Concurrent batch processor.\n\n    Every 1 second:\n      1) Atomically` |
-| 9121–9158 | 19 | `_last_gate_replay_ts: float = 0.0` |
+| 9088–9142 | 5 | `'\n    Concurrent batch processor.\n\n    Every 1 second:\n      1) Atomically` |
+| 9221–9258 | 19 | `_last_gate_replay_ts: float = 0.0` |
 
 ## IO / 并发边界（必须留在原函数里，或显式传参）
 
 | 行区间 | 语句数 | 卡点 |
 |---|---|---|
-| 9045–9117 | 1 | IO 调用: close/commit/execute |
-| 9160–12341 | 1 | await 14 处；IO 调用: close/commit/execute/fetchall/fetchone/rollback/write |
+| 9145–9217 | 1 | IO 调用: close/commit/execute |
+| 9260–12360 | 1 | await 14 处；IO 调用: close/commit/execute/fetchall/fetchone/rollback |
 
 ## 怎么用这份报告
 
