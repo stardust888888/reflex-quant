@@ -4868,8 +4868,6 @@ def _mechanism_downgrade(result: Dict[str, Any], asset: str = "", strength: int 
 def _rescue_target_asset_from_content(
     content: str,
     current_target: str = "",
-    *,
-    preferred_categories: Optional[Tuple[str, ...]] = None,
 ) -> str:
     """服务端兜底：LLM 把 target_asset 写成 NONE/OTHER 时，从新闻正文里识别真实 ticker。
 
@@ -4887,7 +4885,6 @@ def _rescue_target_asset_from_content(
     入参:
       content:  新闻正文（必传；空字符串直接返回 current_target）
       current_target: 现有 target_asset；非 NONE/OTHER 时直接返回
-      preferred_categories: 候选品类白名单；None 时按默认顺序扫描
     """
     cur = (current_target or "").strip().upper()
     if cur and cur not in ("", "NONE", "OTHER", "N/A", "NULL"):
@@ -12006,7 +12003,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                             " WHERE id = ?",
                             (parent_id,),
                         )
-                        _bump_parent_score(conn, parent_id, score, tagged_reason)
+                        _bump_parent_score(conn, parent_id, score)
 
                         # ── Consensus: count cluster density within 30 min ──
                         cluster_count = conn.execute(

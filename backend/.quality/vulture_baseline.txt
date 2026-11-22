@@ -3,30 +3,38 @@
 # 修掉一个就从这里删一行 —— 这个文件只应该变短。
 
 #
-# ── 2026-11-22 第一轮清理：26 → 17 ─────────────────────────────────────────
-# 已删掉的 8 条（都是纯死代码，无副作用）：
-#   cron_tech_signals.py           重复的 return 0
-#   missed_signal_reflection.py    重复的 return 0
-#   review/reflection_logic_analysis.py  重复的 return findings
-#   engine/gate_replay_guard.py    while True 之后的 return 0
-#   kb_facade.py                   try/except 全分支已 return 后的收尾 return out
-#   review/gate_reflection.py      字典 return 之后多余的 return None
-#   feeds/es_feed.py + nq_feed.py  `"es" if False else "es"` 恒等三元
-#   judge_worker.py                解析失败后残留的旧清洗逻辑（见下方"已纠正"）
+# ── 2026-11-22 累计清理：26 → 14 ───────────────────────────────────────────
 #
-# ⚠ 判断纠正（写下来是为了留下判断过程的痕迹）：
-#   judge_worker.py 那段不可达代码，第一遍我判成"清洗被 return 挡住 → markdown
+# 第二轮（17 → 14）：三个"从未被任何调用方使用"的参数，选择**删参数**而不是补实现。
+#   engine/worker_helpers.py :: child_reasoning
+#     _bump_parent_score 的 docstring 许诺"把说明前置写进 reasoning"，
+#     但函数体只 UPDATE sentiment_score（AST 计数：child_reasoning 出现 0 次）。
+#     补实现会把前缀塞进 reasoning —— 而 reasoning 会被判官拼进 full_reasoning、
+#     被前端截前 300 字展示，塞前缀会挤掉正文。要记"为什么改分"，该加专门字段。
+#     → 删掉参数，把 docstring 改成如实描述，避免下一个人以为这段功能存在。
+#   engine/ai_worker.py :: preferred_categories
+#   engine/worker_helpers.py :: preferred_categories
+#     _rescue_target_asset_from_content 两处定义都有这个参数，但**全仓库无调用方传它**
+#     （grep 只有签名和 docstring 命中）。功能从未启用，删除即零风险。
+#
+# 第一轮（26 → 17）：8 条纯死代码 —— 重复 return、不可达 return、
+#   全分支已 return 后的收尾 return、恒等三元、以及 judge_worker 的旧清洗残留：
+#   cron_tech_signals.py / missed_signal_reflection.py / review/reflection_logic_analysis.py
+#   engine/gate_replay_guard.py / kb_facade.py / review/gate_reflection.py
+#   feeds/es_feed.py + nq_feed.py / judge_worker.py
+#
+# ⚠ 判断纠正是判断过程的一部分，留在这里而不抹掉：
+#   judge_worker.py 那段不可达代码，第一遍判成"清洗被 return 挡住 → markdown
 #   包裹会静默失败"，属缺陷。核对后是错的：真正的清洗已在函数开头做过
 #   （剥 <think>、剥 ``` 包裹、取第一个 {}），死的那段是更早版本的残留，
-#   而且它还少补 8 个兜底字段。功能没丢，只是代码脏。
-#   已删残留，并新增 tests/test_judge_json_parse.py（8 条用例）锁住"各种包裹
-#   形态都能解析"—— 否则下次有人再把开头那段当成死代码删掉，才会真丢结果。
+#   而且少补 8 个兜底字段。功能没丢，只是代码脏。
+#   已删残留 + 新增 tests/test_judge_json_parse.py（8 条用例）锁住各种包裹形态。
 #
-# 下面 17 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
+# 下面 14 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
 # 这正是「工具查结构、查不出逻辑」的实例：vulture 只说"没人用"，
-# 说不清"为什么没人用"。四类原因要分开看。
+# 说不清"为什么没人用"。三类原因要分开看。
 #
-# ── 类型一：接口约定，参数必须存在（删了会破坏调用契约）─────────────────
+# ── 类型一：接口约定 / 签名占位（删了会破坏调用契约）──────────────────────
 #   capability_acceptance.py :: dbname
 #     sqlite3 的 authorizer 回调签名固定 5 参 (action,a1,a2,dbname,source)，
 #     dbname 不用也不能删。
@@ -34,18 +42,7 @@
 #     签名占位，docstring 已写明"SL 路径只看 partial_exit_ratio"。名字里带 unused
 #     就是让读代码的人知道这是故意不用，保留。
 #
-# ── 类型二：文档说要做、代码没做（真实缺陷，不擅自补实现）─────────────────
-#   engine/worker_helpers.py :: child_reasoning
-#     _bump_parent_score 的 docstring 写着 "prepend a note to the reasoning field"，
-#     但函数体只 UPDATE 了 sentiment_score，child_reasoning 一次都没读。
-#     → 子决策给父决策提分时，那条本该写进 reasoning 的说明从未写入。
-#   engine/ai_worker.py :: preferred_categories
-#   engine/worker_helpers.py :: preferred_categories
-#     _rescue_target_asset_from_content 的 docstring 提到"优先分类"，
-#     参数传进来却完全没参与匹配 → 兜底识别目标标的时分类偏好不生效。
-#     （以上三条已记入 docs/ops/vulture-清理与缺陷清单-2026-11-22.md）
-#
-# ── 类型三：调用方传了、函数没用（输入被丢掉，改实现前先确认口径）────────────
+# ── 类型二：调用方传了、函数没用（输入被丢掉，改实现前先确认口径）────────────
 #   abnormal_detector.py :: decision_window    _reversal_score 的决策窗未参与判断
 #   bets.py :: tol_days                        _last_price 查"最近价"但不按天数过滤
 #   event_atom.py :: data_anchor_ts            LLM 的时间锚点字段没落库
@@ -57,7 +54,7 @@
 #   missed_signal_reflection.py :: paper_run_id    _upsert_one 落库不带模拟盘 ID
 #   trident2/features/trust.py :: groups_min       event_study 的分组下限未参与
 #
-# ── 类型四：结构性占位 / 停用代码（保留是有意的）────────────────────────
+# ── 类型三：结构性占位 / 停用代码（保留是有意的）────────────────────────
 #   bridge_server.py :: redundant if-condition
 #     第 4385 行 `if True:` 包住 78 行 SSE 回补逻辑，是为了保持这段的缩进层级。
 #     去掉它要整体退一级缩进，块内含多行字符串，改错会动到推送文案 —— 收益小于风险。
@@ -69,9 +66,6 @@ src_python/abnormal_detector.py :: unused variable 'decision_window'
 src_python/bets.py :: unused variable 'tol_days'
 src_python/bridge_server.py :: redundant if-condition
 src_python/capability_acceptance.py :: unused variable 'dbname'
-src_python/engine/ai_worker.py :: unused variable 'preferred_categories'
-src_python/engine/worker_helpers.py :: unused variable 'child_reasoning'
-src_python/engine/worker_helpers.py :: unused variable 'preferred_categories'
 src_python/event_atom.py :: unused variable 'data_anchor_ts'
 src_python/event_atom.py :: unused variable 'event_window_minutes'
 src_python/event_impact_curve.py :: unused variable 'price_at_event'

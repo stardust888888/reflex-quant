@@ -1697,11 +1697,19 @@ def _bump_parent_score(
     conn: sqlite3.Connection,
     parent_id: int,
     child_score: float,
-    child_reasoning: str,
 ) -> bool:
     """
-    If the child's score is more extreme than the parent's, update the
-    parent's sentiment_score and prepend a note to the reasoning field.
+    子决策的分数比父决策更极端时，把父决策的 sentiment_score 拉过去。
+
+    历史：签名里曾有 child_reasoning，docstring 也写着「并把说明前置写进 reasoning」，
+    但那一半从未实现（2026-11-22 核对：函数体只 UPDATE sentiment_score，
+    child_reasoning 出现 0 次）。既没有调用方需要它，就把参数删掉，
+    让签名和实现一致，而不是留一个永远不用的入参让人误解。
+
+    真要记录「为什么被改分」，应该新增专门字段；不要往 reasoning 里塞前缀 ——
+    reasoning 会被判官拼进 full_reasoning、被前端截前 300 字展示，
+    塞前缀会把正文挤掉。
+
     Returns True if the score was bumped.
     """
     row = conn.execute(
@@ -2717,8 +2725,6 @@ def _extract_cross_net_from_text(cleaned: str) -> tuple:
 def _rescue_target_asset_from_content(
     content: str,
     current_target: str = "",
-    *,
-    preferred_categories: Optional[Tuple[str, ...]] = None,
 ) -> str:
     """服务端兜底：LLM 把 target_asset 写成 NONE/OTHER 时，从新闻正文里识别真实 ticker。
 
@@ -2736,7 +2742,6 @@ def _rescue_target_asset_from_content(
     入参:
       content:  新闻正文（必传；空字符串直接返回 current_target）
       current_target: 现有 target_asset；非 NONE/OTHER 时直接返回
-      preferred_categories: 候选品类白名单；None 时按默认顺序扫描
     """
     cur = (current_target or "").strip().upper()
     if cur and cur not in ("", "NONE", "OTHER", "N/A", "NULL"):
