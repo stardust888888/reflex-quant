@@ -199,6 +199,39 @@ def direction_cn_to_db(label: str) -> str:
 # Single-event insert
 # ────────────────────────────────────────────────────────────────────
 
+def _atom_extra_columns(
+    cols: set,
+    *,
+    curve_snapshot: str = "",
+    utc_epoch: Optional[int] = None,
+    utc_iso: str = "",
+    display_tz: str = "",
+    fallback_used: int = 0,
+    event_window_minutes: Optional[int] = None,
+    data_anchor_ts: str = "",
+) -> tuple[list, list]:
+    """按"表里到底有没有这一列"拼装增量列名和值。
+
+    表结构随版本演进（v171 时间双轨、v536 时间语义），老库可能缺列，所以必须
+    逐列判断。这些 if 堆在 insert_event_atom 里会把它的认知复杂度顶穿门禁
+    （实测 24 → 31 被拦住），统一收在这里：以后再加列只改这一处。
+    """
+    anchor = str(data_anchor_ts or "").strip()
+    values: dict[str, Any] = {
+        "curve_snapshot": str(curve_snapshot or ""),
+        "event_time_utc_epoch": int(utc_epoch) if utc_epoch is not None else None,
+        "event_time_utc_iso": str(utc_iso or ""),
+        "event_time_display_tz": str(display_tz or ""),
+        "fallback_used": int(fallback_used),
+        "event_window_minutes": (int(event_window_minutes)
+                                if event_window_minutes is not None else None),
+        # LLM 的 'N/A' 与空串同义：都表示"没给锚点"，不写进库当内容
+        "data_anchor_ts": "" if anchor.upper() == "N/A" else anchor,
+    }
+    present = [(name, val) for name, val in values.items() if name in cols]
+    return [name for name, _ in present], [val for _, val in present]
+
+
 def insert_event_atom(
     *,
     raw_news_id: int,
@@ -223,6 +256,9 @@ def insert_event_atom(
     event_time_utc_iso: str = "",
     event_time_display_tz: str = "",
     fallback_used: int = 0,
+    # ── v536：LLM 时间结构化输出（以前 extract_and_persist 收了就丢）──
+    event_window_minutes: Optional[int] = None,
+    data_anchor_ts: str = "",
     connection: Optional[sqlite3.Connection] = None,
 ) -> int:
     """Insert one event_atom row. Returns new id (or existing id if unique conflict).
@@ -286,19 +322,17 @@ def insert_event_atom(
             int(evidence_count), str(parser_version), cluster_id,
             str(reasoning or "")[:120], _now(),
         ]
-        # 增量列（按列存在情况追加）
-        extra_cols = []
-        extra_vals = []
-        if "curve_snapshot" in cols:
-            extra_cols.append("curve_snapshot"); extra_vals.append(str(curve_snapshot or ""))
-        if "event_time_utc_epoch" in cols:
-            extra_cols.append("event_time_utc_epoch"); extra_vals.append(utc_epoch)
-        if "event_time_utc_iso" in cols:
-            extra_cols.append("event_time_utc_iso"); extra_vals.append(utc_iso)
-        if "event_time_display_tz" in cols:
-            extra_cols.append("event_time_display_tz"); extra_vals.append(display_tz)
-        if "fallback_used" in cols:
-            extra_cols.append("fallback_used"); extra_vals.append(int(fallback_used))
+        # 增量列（按列存在情况追加；拼装规则集中在一个函数里）
+        extra_cols, extra_vals = _atom_extra_columns(
+            cols,
+            curve_snapshot=curve_snapshot,
+            utc_epoch=utc_epoch,
+            utc_iso=utc_iso,
+            display_tz=display_tz,
+            fallback_used=fallback_used,
+            event_window_minutes=event_window_minutes,
+            data_anchor_ts=data_anchor_ts,
+        )
 
         all_cols = base_cols + extra_cols
         all_vals = base_vals + extra_vals
@@ -584,6 +618,8 @@ def extract_and_persist(
                 reasoning=reasoning_text,
                 curve_snapshot=curve_snapshot_blob,
                 fallback_used=int(fallback_used),
+                event_window_minutes=event_window_minutes,
+                data_anchor_ts=str(data_anchor_ts or ""),
                 connection=connection,
             )
             if new_id > 0:

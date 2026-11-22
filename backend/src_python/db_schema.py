@@ -1631,6 +1631,8 @@ _CREATE_EVENT_ATOM = """
         evidence_count          INTEGER NOT NULL DEFAULT 1,
         parser_version          TEXT    NOT NULL DEFAULT 'event_struct.v1',
         cluster_id              INTEGER,
+        event_window_minutes    INTEGER,                -- LLM 给的事件影响窗口（分钟），NULL = 未给
+        data_anchor_ts          TEXT    NOT NULL DEFAULT '',  -- 行情锚点（ISO-8601），'' = 未给
         reasoning               TEXT    NOT NULL DEFAULT '',
         created_at              INTEGER NOT NULL,
         UNIQUE (raw_news_id, event_type_id, event_time, asset_id)

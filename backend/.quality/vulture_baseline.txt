@@ -3,9 +3,9 @@
 # 修掉一个就从这里删一行 —— 这个文件只应该变短。
 
 #
-# ── 2026-11-22 累计清理：26 → 11 ───────────────────────────────────────────
+# ── 2026-11-22 累计清理：26 → 9 ───────────────────────────────────────────
 #
-# 第三轮（14 → 11）：两条"调用方传了、函数没用"被证实是真缺陷，选择**修实现**。
+# 第三轮（14 → 9）：两条"调用方传了、函数没用"被证实是真缺陷，选择**修实现**。
 #   missed_signal_reflection.py :: paper_run_id
 #     表里根本没这一列（DDL 只有 14 列），参数传进来每次被丢；多个模拟盘的漏检
 #     反思写进同一批行，事后分不清是哪次跑的。修法：补列 + 幂等迁移 + COALESCE
@@ -17,6 +17,13 @@
 #     _last_price 只取最新一笔 tick、不看多旧：一只票停更两个月，持仓浮亏会拿
 #     两个月前的价格算成"没亏"。改成超过 tol_days 天就当没有行情（v536）。
 #     这条最值得修：它直接影响"这笔该不该继续拿"的判断。
+#   event_atom.py :: event_window_minutes / data_anchor_ts
+#     ai_worker 每次都把 LLM 的"影响窗口分钟数"和"行情锚点 ISO 时间"传进
+#     extract_and_persist，函数收下后一次都没写库 —— 每条新闻的时间语义每次都丢，
+#     下游只能用默认窗口猜。修法：event_atom 表补两列 + 幂等迁移 + insert 落库
+#     （v536）。落库时 'N/A' 统一存空串、没给窗口存 NULL，不写假值。
+#     顺带：这 2 个 if 一加，insert_event_atom 复杂度 24 → 31 被门禁当场拦下，
+#     于是把"按列存在与否拼装增量列"抽成 _atom_extra_columns —— 以后再加列只改一处。
 #   两条共同点：工具只说"没人用"，说不清"该不该用"——前者是缺陷（数据丢失），
 #   后者只是参数没接到实现上。判断依据只能是读实现 + 看真实数据。
 #
@@ -45,7 +52,7 @@
 #   而且少补 8 个兜底字段。功能没丢，只是代码脏。
 #   已删残留 + 新增 tests/test_judge_json_parse.py（8 条用例）锁住各种包裹形态。
 #
-# 下面 11 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
+# 下面 9 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
 # 这正是「工具查结构、查不出逻辑」的实例：vulture 只说"没人用"，
 # 说不清"为什么没人用"。三类原因要分开看。
 #
@@ -59,8 +66,6 @@
 #
 # ── 类型二：调用方传了、函数没用（输入被丢掉，改实现前先确认口径）────────────
 #   abnormal_detector.py :: decision_window    _reversal_score 的决策窗未参与判断
-#   event_atom.py :: data_anchor_ts            LLM 的时间锚点字段没落库
-#   event_atom.py :: event_window_minutes      同上，事件窗口时长没落库
 #   event_impact_curve.py :: price_at_event    曲线构建不吃事件当时的价格
 #   meta_reflection_updater.py :: current_version  _next_version 不看当前版本号
 #   meta_reflection_updater.py :: old_summary      _build_new_block 不看旧摘要
@@ -77,8 +82,6 @@
 src_python/abnormal_detector.py :: unused variable 'decision_window'
 src_python/bridge_server.py :: redundant if-condition
 src_python/capability_acceptance.py :: unused variable 'dbname'
-src_python/event_atom.py :: unused variable 'data_anchor_ts'
-src_python/event_atom.py :: unused variable 'event_window_minutes'
 src_python/event_impact_curve.py :: unused variable 'price_at_event'
 src_python/meta_reflection_updater.py :: unused variable 'current_version'
 src_python/meta_reflection_updater.py :: unused variable 'old_summary'

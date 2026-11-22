@@ -2862,6 +2862,9 @@ _EVENT_ATOM_COLUMNS = [
     ("event_time_display_tz", "TEXT NOT NULL DEFAULT 'Asia/Shanghai'"),
     # v171+ LLM 拒后 fallback 标记
     ("fallback_used", "INTEGER NOT NULL DEFAULT 0"),
+    # v536：LLM 的时间结构化输出（ai_worker 一直在传，但这条链路以前没落库）
+    ("event_window_minutes", "INTEGER"),
+    ("data_anchor_ts", "TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -3371,7 +3374,8 @@ def schema_ready(conn: sqlite3.Connection) -> bool:
         if "event_impact_curve" not in tables:
             return False
         if not {"curve_snapshot", "event_time_utc_epoch",
-                "event_time_utc_iso", "event_time_display_tz"}.issubset(_cols("event_atom")):
+                "event_time_utc_iso", "event_time_display_tz",
+                "event_window_minutes", "data_anchor_ts"}.issubset(_cols("event_atom")):
             return False
         if "decision_context" not in _cols("ai_decisions"):
             return False
@@ -3783,6 +3787,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         ("event_time_utc_iso", "TEXT"),
         ("event_time_display_tz", "TEXT"),
         ("fallback_used", "INTEGER"),
+        # v536：LLM 时间结构化字段，之前只在签名里收、从没落过库
+        ("event_window_minutes", "INTEGER"),
+        ("data_anchor_ts", "TEXT NOT NULL DEFAULT ''"),
     ])
     _ensure_columns(conn, "event_impact_stat", [
         ("asset", "TEXT"),
