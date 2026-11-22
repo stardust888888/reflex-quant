@@ -4333,6 +4333,22 @@ def _spool_batch(successes) -> None:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
+async def _spool_on_done(_t):
+    """等单个分析任务返回后，立即把这一条落 spool。
+
+    v493：把任务包一层，谁先分析完谁先落盘 —— 进程中途被杀时，已出的结果
+    不会跟着内存里的 batch 一起丢。写失败只打印，不影响任务返回值。
+    """
+    _r = await _t
+    try:
+        if isinstance(_r, dict) and int(_r.get("news_id") or 0) > 0:
+            _spool_batch([_r])
+    except Exception as _e_sp:
+        print(f"  [SPOOL] 单条落盘失败: {type(_e_sp).__name__}: "
+              f"{str(_e_sp)[:60]}", flush=True)
+    return _r
+
+
 def _spool_clear() -> None:
     try:
         if os.path.exists(_SPOOL_PATH):
@@ -9842,16 +9858,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         # 包一层之后：哪条先分析完，哪条立刻落盘，被杀最多丢 1 条。
         _raw_tasks = tasks
 
-        async def _spool_on_done(_t):
-            _r = await _t
-            try:
-                if isinstance(_r, dict) and int(_r.get("news_id") or 0) > 0:
-                    _spool_batch([_r])
-            except Exception as _e_sp:
-                print(f"  [SPOOL] 单条落盘失败: {type(_e_sp).__name__}: "
-                      f"{str(_e_sp)[:60]}", flush=True)
-            return _r
-
+        # v493：逐条落盘包装器已提到模块级（_spool_on_done，闭包引用 0）
         tasks = [_spool_on_done(_t) for _t in _raw_tasks]
 
         _warm_first = (os.getenv("TRIDENT_CACHE_WARM_FIRST", "1").strip() != "0"

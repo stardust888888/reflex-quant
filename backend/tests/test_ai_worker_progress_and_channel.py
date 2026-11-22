@@ -94,3 +94,43 @@ def test_same_non_loop_step_keeps_step_ts(tmp_path, monkeypatch):
     aw._log_progress("persist")
     data = json.loads(_progress_file(tmp_path).read_text(encoding="utf-8"))
     assert data["step_ts"] == 12345
+
+
+def test_spool_on_done_only_spools_valid_rows(monkeypatch):
+    """逐条落盘：只落 news_id > 0 的结果，返回值原样透传。"""
+    written = []
+    monkeypatch.setattr(aw, "_spool_batch", lambda xs: written.append(xs))
+
+    async def _ok():
+        return {"news_id": 42, "result": {"suggested_action": "BUY"}}
+
+    async def _no_id():
+        return {"news_id": 0}
+
+    async def _none():
+        return None
+
+    async def _run():
+        return (await aw._spool_on_done(_ok()),
+                await aw._spool_on_done(_no_id()),
+                await aw._spool_on_done(_none()))
+
+    r1, r2, r3 = aw.asyncio.run(_run())
+
+    assert r1["news_id"] == 42 and r2["news_id"] == 0 and r3 is None
+    assert len(written) == 1 and written[0][0]["news_id"] == 42
+
+
+def test_spool_on_done_swallows_write_error(monkeypatch):
+    """spool 写失败只打印，不能让已分析好的结果跟着异常一起丢。"""
+
+    def _boom(_xs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(aw, "_spool_batch", _boom)
+
+    async def _ok():
+        return {"news_id": 7}
+
+    r = aw.asyncio.run(aw._spool_on_done(_ok()))
+    assert r["news_id"] == 7
