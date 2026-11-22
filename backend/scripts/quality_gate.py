@@ -98,6 +98,10 @@ def collect_complexipy() -> dict[str, int]:
         proc = _run([
             _tool("complexipy"), "src_python",
             "--output-format", "json", "--output", out, "-C", "no", "-q",
+            # 阈值放到没意义的大：这一趟只负责"导出每个函数的复杂度"，
+            # 判定由下面的基线比对做。否则 complexipy 一旦发现有函数超默认阈值 15，
+            # 就用退出码 1 表示"失败"，脚本会误以为工具本身挂了。
+            "--max-complexity-allowed", "99999",
         ])
         if proc.returncode != 0:
             print(proc.stderr, file=sys.stderr)
