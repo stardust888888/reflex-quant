@@ -115,8 +115,9 @@ def launchd_report() -> list[dict]:
 def lock_report(minutes: int = 60, tail_lines: int = 400) -> dict:
     """粗略统计最近的写锁报错。
 
-    只读每个日志**末尾 400 行**：日志是追加写的，末尾才是最近发生的事；
-    整文件扫描会把几周前的历史报错也算进"最近 1 小时"（实测虚报 1.8 万次）。
+    只读每个日志**末尾 tail_lines 行**（默认 400）：日志是追加写的，末尾才是
+    最近发生的事；整文件扫描会把几周前的历史报错也算进"最近 1 小时"
+    （实测虚报 1.8 万次）。
     """
     cutoff = time.time() - minutes * 60
     hits = 0
@@ -129,7 +130,9 @@ def lock_report(minutes: int = 60, tail_lines: int = 400) -> dict:
             with open(path, "rb") as fh:
                 fh.seek(0, os.SEEK_END)
                 size = fh.tell()
-                fh.seek(max(0, size - 400 * 120))   # 约 400 行 * 120B
+                # 按平均每行 120B 估读窗口。用参数而不是写死 400 ——
+                # 之前这里是常量，tail_lines 传进来就丢了（v536 修）。
+                fh.seek(max(0, size - tail_lines * 120))
                 tail = fh.read().decode("utf-8", errors="ignore")
             hits += tail.count("database is locked")
         except OSError:

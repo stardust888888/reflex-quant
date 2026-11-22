@@ -3,7 +3,22 @@
 # 修掉一个就从这里删一行 —— 这个文件只应该变短。
 
 #
-# ── 2026-11-22 累计清理：26 → 14 ───────────────────────────────────────────
+# ── 2026-11-22 累计清理：26 → 11 ───────────────────────────────────────────
+#
+# 第三轮（14 → 11）：两条"调用方传了、函数没用"被证实是真缺陷，选择**修实现**。
+#   missed_signal_reflection.py :: paper_run_id
+#     表里根本没这一列（DDL 只有 14 列），参数传进来每次被丢；多个模拟盘的漏检
+#     反思写进同一批行，事后分不清是哪次跑的。修法：补列 + 幂等迁移 + COALESCE
+#     保首次真实 run id（v535，66ec8f1）。
+#   health_check.py :: tail_lines
+#     docstring 说"只读末尾 400 行"，实现把 400 写死，参数传了等于没传；改成按
+#     tail_lines 算读取窗口，默认 400 行为不变（v536）。
+#   bets.py :: tol_days
+#     _last_price 只取最新一笔 tick、不看多旧：一只票停更两个月，持仓浮亏会拿
+#     两个月前的价格算成"没亏"。改成超过 tol_days 天就当没有行情（v536）。
+#     这条最值得修：它直接影响"这笔该不该继续拿"的判断。
+#   两条共同点：工具只说"没人用"，说不清"该不该用"——前者是缺陷（数据丢失），
+#   后者只是参数没接到实现上。判断依据只能是读实现 + 看真实数据。
 #
 # 第二轮（17 → 14）：三个"从未被任何调用方使用"的参数，选择**删参数**而不是补实现。
 #   engine/worker_helpers.py :: child_reasoning
@@ -30,7 +45,7 @@
 #   而且少补 8 个兜底字段。功能没丢，只是代码脏。
 #   已删残留 + 新增 tests/test_judge_json_parse.py（8 条用例）锁住各种包裹形态。
 #
-# 下面 14 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
+# 下面 11 条**不是死代码**，删掉会改行为或抹掉缺陷线索，所以保留并逐条说明。
 # 这正是「工具查结构、查不出逻辑」的实例：vulture 只说"没人用"，
 # 说不清"为什么没人用"。三类原因要分开看。
 #
@@ -44,14 +59,11 @@
 #
 # ── 类型二：调用方传了、函数没用（输入被丢掉，改实现前先确认口径）────────────
 #   abnormal_detector.py :: decision_window    _reversal_score 的决策窗未参与判断
-#   bets.py :: tol_days                        _last_price 查"最近价"但不按天数过滤
 #   event_atom.py :: data_anchor_ts            LLM 的时间锚点字段没落库
 #   event_atom.py :: event_window_minutes      同上，事件窗口时长没落库
 #   event_impact_curve.py :: price_at_event    曲线构建不吃事件当时的价格
-#   health_check.py :: tail_lines              docstring 说"末尾 400 行"，实现写死 400
 #   meta_reflection_updater.py :: current_version  _next_version 不看当前版本号
 #   meta_reflection_updater.py :: old_summary      _build_new_block 不看旧摘要
-#   missed_signal_reflection.py :: paper_run_id    _upsert_one 落库不带模拟盘 ID
 #   trident2/features/trust.py :: groups_min       event_study 的分组下限未参与
 #
 # ── 类型三：结构性占位 / 停用代码（保留是有意的）────────────────────────
@@ -63,13 +75,11 @@
 #     return 2，后面旧实现整段留作参考。要删应单独提交，不与本次混合。
 
 src_python/abnormal_detector.py :: unused variable 'decision_window'
-src_python/bets.py :: unused variable 'tol_days'
 src_python/bridge_server.py :: redundant if-condition
 src_python/capability_acceptance.py :: unused variable 'dbname'
 src_python/event_atom.py :: unused variable 'data_anchor_ts'
 src_python/event_atom.py :: unused variable 'event_window_minutes'
 src_python/event_impact_curve.py :: unused variable 'price_at_event'
-src_python/health_check.py :: unused variable 'tail_lines'
 src_python/meta_reflection_updater.py :: unused variable 'current_version'
 src_python/meta_reflection_updater.py :: unused variable 'old_summary'
 src_python/quick_sim.py :: unused variable 'tp1_ratio_unused'

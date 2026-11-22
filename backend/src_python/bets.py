@@ -126,9 +126,15 @@ def clusters_from_matrix(corr: Dict[str, Any],
 # ────────────────────────── 持仓 / 分注 ──────────────────────────
 def _last_price(conn: sqlite3.Connection, asset: str,
                 tol_days: int = 7) -> Optional[float]:
+    """最近一笔有效价；超过 tol_days 天没更新，就当作「没有行情」返回 None。
+
+    以前这里只取最新一行、完全不看它有多旧（tol_days 一直在签名里但没用上）：
+    一只票停更两个月，持仓浮亏会拿两个月前的价格算成「没亏」。
+    """
+    cutoff = int(time.time()) - max(1, int(tol_days)) * 86400
     row = conn.execute(
-        "SELECT price FROM market_ticks WHERE symbol=? AND price>0 "
-        "ORDER BY ts DESC LIMIT 1", (asset.upper(),),
+        "SELECT price FROM market_ticks WHERE symbol=? AND price>0 AND ts>=? "
+        "ORDER BY ts DESC LIMIT 1", (asset.upper(), cutoff),
     ).fetchone()
     return float(row[0]) if row else None
 
