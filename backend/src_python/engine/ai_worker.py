@@ -8819,6 +8819,48 @@ def _start_progress_thread() -> None:
         print(f"[PROGRESS] 心跳线程启动失败: {type(_hb_exc).__name__}", flush=True)
 
 
+def _log_progress(step: str, **extra: Any) -> None:
+    """把"现在卡在哪一步"写进 runtime/ai_worker_progress.json（看门狗读它）。
+
+    v398c：step 只在真正换步时刷新 step_ts；但 "loop" 表示主循环空转
+    （没有 PENDING 新闻），空转本来就该一直被看作健康 —— 必须每轮刷新，
+    否则看门狗会把「闲着的引擎」当成「卡死的引擎」在 30 分钟后杀掉。
+    v434：extra 用于把「等了多久、还要等多久」这类现场信息一并落盘，
+    不改 step 名（看门狗的 pool-blocked 判据是精确匹配，改名前缀会误判）。
+    v536：它原来定义在 ai_worker 函数体里，闭包引用为 0（只用到模块级常量），
+    提到模块级；行为不变，主函数少一层嵌套。
+    """
+    if step != _PROGRESS_STATE.get("step") or step == "loop":
+        _PROGRESS_STATE["step_ts"] = time.time()
+    _PROGRESS_STATE["step"] = step
+    try:
+        _progress_file = os.path.join(config.BASE_DIR, "runtime", "ai_worker_progress.json")
+        with open(_progress_file, "w", encoding="utf-8") as _pf:
+            json.dump({
+                "step": step,
+                "ts": time.time(),
+                "time_str": datetime.now(config.TZ_SHANGHAI).strftime("%H:%M:%S"),
+                "step_ts": _PROGRESS_STATE.get("step_ts") or time.time(),
+                **extra,
+            }, _pf, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+# v323：区分"分析失败"与"根本没拿到模型响应"。实测额度耗尽期间每批都是
+# 0/8 ok | 8 failed，失败原因全是通道熔断；而回写会 retry_count+1，三次之后
+# 这条新闻就被永久标 FAILED —— 一次额度事故就把新闻烧成死数据（全表 599 条
+# FAILED 里就混着这类）。通道/额度类失败不计重试次数，只退回 PENDING 等恢复。
+_CHANNEL_FAIL_KW = ("熔断", "quota", "429", "所有通道", "无可用通道",
+                    "no available", "容量不足", "额度")
+
+
+def _is_channel_failure(err) -> bool:
+    """通道/额度类失败（不该计入 retry_count）。"""
+    _t = str(err or "")
+    return any(k.lower() in _t.lower() for k in _CHANNEL_FAIL_KW)
+
+
 _SIGNAL_SECTION_PREFIX = "[Reference Signals] 历史统计信号（实时提炼自已结算模拟交易，仅作参考）："
 # 参考信号的注入顺序（key → 中文标签）。顺序变了 prompt 也就变了，别随手调。
 _SIGNAL_GROUPS = (
@@ -9039,28 +9081,7 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
         # 看门狗 600s 判挂 → kickstart → 正在跑的整批连同已 INSERT 的行一起没了。
         # 实测今日 28 次启动、决策时间戳在重启点前后被回退，就是这个形态。
         _PROGRESS_STATE["step"] = _PROGRESS_STATE.get("step") or "loop"
-        def _log_progress(step: str, **extra: Any) -> None:
-            # v398c：step 只在真正换步时刷新 step_ts；但 "loop" 表示主循环空转
-            # （没有 PENDING 新闻），空转本来就该一直被看作健康 —— 必须每轮刷新，
-            # 否则看门狗会把「闲着的引擎」当成「卡死的引擎」在 30 分钟后杀掉。
-            # v434：extra 用于把「等了多久、还要等多久」这类现场信息一并落盘，
-            # 不改 step 名（看门狗的 pool-blocked 判据是精确匹配，改名前缀会误判）。
-            if step != _PROGRESS_STATE.get("step") or step == "loop":
-                _PROGRESS_STATE["step_ts"] = time.time()
-            _PROGRESS_STATE["step"] = step
-            try:
-                _progress_file = os.path.join(config.BASE_DIR, "runtime", "ai_worker_progress.json")
-                with open(_progress_file, "w", encoding="utf-8") as _pf:
-                    json.dump({
-                        "step": step,
-                        "ts": time.time(),
-                        "time_str": datetime.now(config.TZ_SHANGHAI).strftime("%H:%M:%S"),
-                        "step_ts": _PROGRESS_STATE.get("step_ts") or time.time(),
-                        **extra,
-                    }, _pf, ensure_ascii=False)
-            except Exception:
-                pass
-
+        # v536：_log_progress 已提到模块级（闭包引用为 0，只依赖模块级常量）
         _log_progress("loop")
         _start_progress_thread()
 
@@ -12109,13 +12130,8 @@ async def ai_worker(loop: asyncio.AbstractEventLoop) -> None:
                 # 而下面的回写会 retry_count+1，三次之后这条新闻就被永久标 FAILED
                 # —— 一次额度事故就把新闻烧成死数据（全表 599 条 FAILED 里就混着这类）。
                 # 通道/额度类失败不计重试次数，只退回 PENDING 等额度恢复。
-                _CHANNEL_FAIL_KW = ("熔断", "quota", "429", "所有通道", "无可用通道",
-                                    "no available", "容量不足", "额度")
-
-                def _is_channel_failure(err) -> bool:
-                    _t = str(err or "")
-                    return any(k.lower() in _t.lower() for k in _CHANNEL_FAIL_KW)
-
+                # v536：_CHANNEL_FAIL_KW 与 _is_channel_failure 已提到模块级
+                # （原来定义在这里，只被下面这一处循环用；常量与判定放一起更好找）
                 for f in failures:
                     nid = f["news_id"]
                     if nid > 0 and nid not in done_news_ids:

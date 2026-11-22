@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import builtins
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,7 +92,8 @@ def _closure_refs(fn: ast.AST, module_names: set[str]) -> list[str]:
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n is not fn:
             local.add(n.name)
     loads = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-    return sorted(loads - local - module_names)
+    # builtin（Exception / any / bool …）不算闭包依赖，否则每个函数都显得"有依赖"
+    return sorted(loads - local - module_names - set(dir(builtins)))
 
 
 def _branch_count(node: ast.AST) -> int:
